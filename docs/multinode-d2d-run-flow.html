@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nvbandwidth 多节点 D2D 测试总结（用例总览 + 1 对 1 读写精读）</title>
+<style>
+  :root {
+    --a: #2f5d8a;
+    --a-light: #e8eff7;
+    --b: #b5651d;
+    --b-light: #fbeee1;
+    --go: #2e7d4f;
+    --go-light: #e6f4ea;
+    --mpi: #7b3fa0;
+    --mpi-light: #f2eafa;
+    --ink: #1a1a1a;
+    --muted: #5f6368;
+    --line: #dfe3e8;
+    --paper: #ffffff;
+    --bg: #f6f7f9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px 36px 64px 284px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+  }
+  .toc {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 248px;
+    background: var(--paper);
+    border-right: 1px solid var(--line);
+    padding: 28px 20px;
+    overflow-y: auto;
+  }
+  .toc h3 { font-size: 15px; margin: 0 0 14px; color: var(--a); letter-spacing: 1px; }
+  .toc a {
+    display: block;
+    padding: 8px 12px;
+    margin: 3px 0;
+    border-radius: 6px;
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 14px;
+  }
+  .toc a:hover { background: var(--a-light); color: var(--a); }
+  .page { max-width: 1500px; margin: 0 auto; }
+  h1 { font-size: 30px; margin: 0 0 10px; letter-spacing: 0.5px; }
+  h2 { font-size: 22px; margin: 46px 0 14px; padding-left: 12px; border-left: 5px solid var(--a); }
+  p { margin: 8px 0; }
+  .sub { color: var(--muted); margin: 0 0 22px; }
+  .card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 26px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  }
+  .card b.k { color: var(--a); }
+  ul { margin: 8px 0; padding-left: 24px; }
+  li { margin: 4px 0; }
+  code {
+    background: #f1f3f6;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 14px;
+  }
+  table.sum { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 1100px; }
+  table.sum th {
+    background: #eceff3;
+    color: #30343a;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 2px solid var(--a);
+  }
+  table.sum td {
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 12px;
+    font-size: 14px;
+    vertical-align: top;
+  }
+  table.sum tr:nth-child(even) td { background: #fafbfc; }
+  table.sum td.stage { font-weight: 600; color: var(--a); white-space: nowrap; }
+  table.sum td.mpi { color: var(--mpi); font-weight: 600; white-space: nowrap; }
+  .tbl-wrap { overflow-x: auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; margin: 0 0 14px; font-size: 14px; color: var(--muted); }
+  .legend i { display: inline-block; width: 16px; height: 14px; border-radius: 4px; margin-right: 6px; vertical-align: -2px; border: 1.5px solid #c9ced6; }
+  svg { width: 100%; max-width: 1180px; height: auto; display: block; margin: 0 auto; }
+  .note {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-left: 5px solid var(--mpi);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-top: 18px;
+    font-size: 14.5px;
+  }
+  .note b { color: var(--mpi); }
+</style>
+</head>
+<body>
+<nav class="toc">
+  <h3>目 录</h3>
+  <a href="#sec-others">一、多节点 D2D 用例总览</a>
+  <a href="#sec-ddt">二、MultinodeDeviceToDeviceTransfer 精读（1 对 1 读写）</a>
+  <a href="#sec-summary" style="padding-left:26px;font-size:13.5px;color:var(--muted)">2.1 函数功能总结</a>
+  <a href="#sec-table" style="padding-left:26px;font-size:13.5px;color:var(--muted)">2.2 流程阶段总结表</a>
+  <a href="#sec-run-flow" style="padding-left:26px;font-size:13.5px;color:var(--muted)">2.3 run() 流程图</a>
+  <a href="#sec-pairs-flow" style="padding-left:26px;font-size:13.5px;color:var(--muted)">2.4 generateTestPairs 流程图</a>
+  <a href="#sec-members" style="padding-left:26px;font-size:13.5px;color:var(--muted)">2.5 srcNode / peerNode 构造逻辑</a>
+  <a href="#sec-domemcpy" style="padding-left:26px;font-size:13.5px;color:var(--muted)">2.6 doMemcpy 执行与采样</a>
+  <a href="#sec-dispatch" style="padding-left:26px;font-size:13.5px;color:var(--muted)">2.7 dispatchMemcpy 分活机制</a>
+  <a href="#sec-nodehelper" style="padding-left:26px;font-size:13.5px;color:var(--muted)">2.8 NodeHelper 单/多节点对比</a>
+  <a href="#sec-domemcpycore" style="padding-left:26px;font-size:13.5px;color:var(--muted)">2.9 doMemcpyCore 流程与时序</a>
+  <a href="#sec-bidir">三、MultinodeDeviceToDeviceBidirTransfer 精读（1 对 1 双向）</a>
+  <a href="#sec-bidir-summary" style="padding-left:26px;font-size:13.5px;color:var(--muted)">3.1 函数功能总结</a>
+  <a href="#sec-bidir-diff" style="padding-left:26px;font-size:13.5px;color:var(--muted)">3.2 与单向用例的逐维度差异</a>
+  <a href="#sec-bidir-buffers" style="padding-left:26px;font-size:13.5px;color:var(--muted)">3.3 四块 buffer 与两个交叉任务</a>
+  <a href="#sec-bidir-flow" style="padding-left:26px;font-size:13.5px;color:var(--muted)">3.4 run() 流程图</a>
+  <a href="#sec-bidir-core" style="padding-left:26px;font-size:13.5px;color:var(--muted)">3.5 双向并发的逐 rank 时序</a>
+  <a href="#sec-a21" style="margin-top:6px">四、MultinodeAllToOneWriteSM 精读（多对 1 聚合写）</a>
+  <a href="#sec-a21-r0" style="padding-left:26px;font-size:13.5px;color:var(--muted)">4.1 第一轮：所有 → GPU0</a>
+  <a href="#sec-a21-r1" style="padding-left:26px;font-size:13.5px;color:var(--muted)">4.2 第二轮：所有 → GPU1</a>
+  <a href="#sec-af1" style="margin-top:6px">五、MultinodeAllFromOneReadSM 精读（1 源多读聚合读）</a>
+  <a href="#sec-af1-r0" style="padding-left:26px;font-size:13.5px;color:var(--muted)">5.1 第一轮：GPU0 → 所有</a>
+  <a href="#sec-af1-r1" style="padding-left:26px;font-size:13.5px;color:var(--muted)">5.2 第二轮：GPU1 → 所有</a>
+</nav>
+<div class="page">
+
+  <h1>nvbandwidth 多节点 D2D 测试总结</h1>
+  <p class="sub">场景：2 节点 × 每节点 2 卡，worldSize = 4（rank0/1 在节点 A，rank2/3 在节点 B），1 对 1 D2D（单向 / 双向）示例 pair (0, 2)；多对 1 聚合写见第四章，1 源多读聚合读见第五章</p>
+
+  <h2 id="sec-others" style="margin-top:44px">一、多节点 D2D 用例总览</h2>
+  <div class="card" style="margin-bottom:14px">
+    <p>多节点 D2D 家族共 8 类用例（按 CE/SM/TMA 组合展开），全部共用同一套 doMemcpy / doMemcpyCore 引擎与 NodeHelper 机制，区别只在用例层：buffer 清单怎么组（几对、谁 owner）、实参怎么排、跑几轮。第二章以 1 对 1 读写、第三章以 1 对 1 双向为样本做精读。</p>
+  </div>
+  <p style="margin:14px 0 6px"><b class="k">表 1 · 多节点 D2D 八类用例总览（含拷贝引擎 initiator）</b></p>
+  <div class="tbl-wrap">
+  <table class="sum" style="min-width:980px">
+    <tr><th>场景</th><th>用例（test key）</th><th>执行类</th><th>拷贝引擎（initiator 子类）</th><th>执行说明</th></tr>
+    <tr><td class="stage">1 对 1 写</td><td>multinode_device_to_device_memcpy_write_<b>ce / sm / tma</b></td><td>MultinodeDeviceToDeviceTransfer</td><td>MemcpyInitiatorCE / SM / TMA（按变体自动选择）</td><td>逐 pair 串行；每对 1 个任务（srcNode→peerNode），执行者恒为 pair.first，FIRST_BW —— 即第二章精读的路径</td></tr>
+    <tr><td class="stage">1 对 1 读</td><td>multinode_device_to_device_memcpy_read_<b>ce / sm / tma</b></td><td>MultinodeDeviceToDeviceTransfer</td><td>MemcpyInitiatorCE / SM / TMA（按变体自动选择）</td><td>同上，仅 doMemcpy(peerNode, srcNode) 实参对调 + PREFER_DST 偏好翻转，数据从对端流入 pair.first</td></tr>
+    <tr><td class="stage">1 对 1 双向</td><td>multinode_device_to_device_bidirectional_memcpy_<b>write / read</b>_<b>ce / sm / tma</b></td><td>MultinodeDeviceToDeviceBidirTransfer</td><td>MemcpyInitiatorCE / SM / TMA（按变体自动选择）</td><td>逐 pair 串行（cachedPairLoop 对称对可镜像复用）；每对仅 1 次调用、内含 2 个交叉任务（srcNodes={peer1, src2}），两端 rank 各认领 1 个、A↔B 双向同时对开，VECTOR_BW 两方向各记一值 + Total</td></tr>
+    <tr><td class="stage">多打一写</td><td>multinode_device_to_device_all_to_one_write_sm</td><td>MultinodeAllToOneWriteSM</td><td>MemcpyInitiatorSM（硬编码）</td><td>逐目标串行（for dstDeviceId）；目标选定后其余 W-1 个 rank 并发写它——每个源 rank 认领自己的 1 个任务（PREFER_SRC），SUM_BW 经 Allreduce 聚合入站带宽</td></tr>
+    <tr><td class="stage">一源多读</td><td>multinode_device_to_device_all_from_one_read_sm</td><td>MultinodeAllFromOneReadSM</td><td>MemcpyInitiatorSM（硬编码）</td><td>逐源串行；源选定后其余 W-1 个 rank 并发从它读，SUM_BW</td></tr>
+    <tr><td class="stage">一对全广播</td><td>multinode_device_to_device_broadcast_one_to_all_sm</td><td>MultinodeBroadcastOneToAllSM</td><td><b>MemcpyInitiatorMulticastWrite</b>（硬编码，multimem.st 组播写内核）</td><td>逐源串行；每源仅 1 个任务——写 multicast 对象，硬件一次复制到全网（无多流），SUM_BW</td></tr>
+    <tr><td class="stage">全网广播</td><td>multinode_device_to_device_broadcast_all_to_all_sm</td><td>MultinodeBroadcastAllToAllSM</td><td><b>MemcpyInitiatorMulticastWrite</b>（硬编码）</td><td>无外层循环，1 次调用；W 个 rank 并发各写自己的 multicast 对象，全员同时被全网收到，SUM_BW</td></tr>
+    <tr><td class="stage">对径互写</td><td>multinode_bisect_write_ce</td><td>MultinodeBisectWriteCE</td><td>MemcpyInitiatorCE（硬编码）</td><td>无外层循环，1 次调用；W 个对径任务（i → (i+W/2)%W）全员同时跑，VECTOR_BW 每任务一值</td></tr>
+    <tr><td class="stage">组播写</td><td>multinode_multicast_fabric_put_<b>sm / tma</b></td><td>MultinodeMulticastFabricPut</td><td><b>MemcpyInitiatorMulticastWrite</b>（sm / tma 两个 key 共用同一实现）</td><td>逐卡串行；每卡 1 个任务写 multicast 对象（结构同"一对全广播"），结果取全网平均</td></tr>
+  </table>
+  </div>
+  <div class="note" style="margin-top:12px">
+    <ul style="margin:0; padding-left:20px">
+      <li><b>共同点：</b>全部复用 2.6 / 2.7 / 2.9 的执行引擎（闸门、采样循环、结果归集），差异只在用例层的 buffer 组织与调用方式。</li>
+      <li><b>多流机器何时真转：</b>多节点下每个执行 rank 恰好认领 1 个任务、开 1 条流——bidir 的 2 个任务拆给两端 rank，多打一/一打多的 N-1 个任务拆给 N-1 个 rank；WaitEvent 锚点链、stream0 等待链在多节点全程休眠（它们服务于单节点"单进程持有全部任务"的场景）。跨 rank 同时起跑靠共享 device 闩针，结果归集靠 Bcast / Allreduce。</li>
+      <li><b>串行/并发的维度：</b>串行的都是"选谁"（逐 pair / 逐目标 / 逐源），选定后的并发由引擎保证（闸门对齐 + 各 rank 各自的流同时执行）；multicast 系列靠硬件复制，连多流都不需要。</li>
+      <li><b>组播写是唯一例外：</b>使用 MultinodeMemoryAllocationMulticast（multicast 对象，一次写全网可见），不走第二章精读的 Unicast fabric 句柄逐卡映射路径。</li>
+      <li><b>拷贝引擎列即跨节点场景筛选结果：</b>8 类用例全部跨节点（数据均经 NVLink / fabric 传输），initiator 子类只决定用哪种引擎搬运——p2p / 双向按变体在 CE、SM、TMA 三选一，聚合类（多打一 / 一源多读）和对径互写硬编码单一引擎，组播三兄弟统一走 MemcpyInitiatorMulticastWrite（kernel 内用 multimem.st 指令写 multicast VA，硬件扇出）。引擎差异全部注入在 doMemcpyCore 内部 memcpyFunc 虚函数分派点，调度层（谁执行、几条流）不受影响。</li>
+    </ul>
+  </div>
+  <p style="margin:14px 0 6px"><b class="k">表 2 · 各拷贝引擎 memcpyFunc 的实际接口（全部经 doMemcpyCore 的 memcpyFunc 虚分派点调用）</b></p>
+  <div class="tbl-wrap">
+  <table class="sum" style="min-width:1050px">
+    <tr><th>引擎（initiator 子类）</th><th>memcpyFunc 内部动作</th><th>最终接口 / 指令</th><th>说明</th></tr>
+    <tr><td class="stage">MemcpyInitiatorCE</td><td>for 循环 loopCount 次 <code>cuMemcpyAsync(dst, src, copySize, stream)</code></td><td><b>cuMemcpyAsync</b>（CE / DMA 拷贝引擎）</td><td>拷贝由专用 DMA 硬件执行，不占用 SM；拷贝大小不截断（srcSize == dstSize）</td></tr>
+    <tr><td class="stage">MemcpyInitiatorSM</td><td>调用 copyKernel</td><td>stridingMemcpyKernel（默认大小）/<br>simpleCopyKernel（小缓冲）</td><td>uint4（16B）跨步拷贝，铺满全部 SM；缓冲小于阈值时退化为简单内核，避免按线程取整截断大小</td></tr>
+    <tr><td class="stage">MemcpyInitiatorTMA</td><td>调用 copyKernelTMA</td><td>tma_memcpy_kernel（内联 PTX <b>cp.async.bulk</b>，全局↔共享内存批量搬运）</td><td>走 TMA 专用硬件单元；强制 16B 对齐（大小/源/目的地址均校验），按共享内存块分步搬运</td></tr>
+    <tr><td class="stage">MemcpyInitiatorMulticastWrite</td><td>调用 multicastCopy(dst, src, size, stream, loopCount)</td><td>multicastCopyKernel（内联 PTX <b>multimem.st</b> 组播写指令）</td><td>一次写 multicast VA，NVLink fabric 硬件扇出复制到全网各卡；强制 16B 粒度（multimem_st_128 对齐断言）</td></tr>
+    <tr><td class="stage">MemcpyInitiatorSMSplitWarp</td><td>调用 copyKernelSplitWarp</td><td>splitWarpCopyKernel（半 warp 双向对拷）</td><td>用于双向同卡对拷变体（带宽折半计），<b>多节点用例未使用</b></td></tr>
+  </table>
+  </div>
+  <div class="note" style="margin-top:10px">
+    <ul style="margin:0; padding-left:20px">
+      <li><b>调用链：</b>8 类用例的拷贝动作全部经 doMemcpyCore 内的 <code>memcpyInitiator->memcpyFunc(desc, info)</code> 虚函数分派——正式测量传 <code>&info</code>（填充校验缓冲等运行时信息），预热传 <code>nullptr</code>（不污染校验缓冲）；子类差异到此为止，调度层（谁执行、几条流）完全一致。</li>
+      <li><b>单节点独有变体：</b>MemcpyInitiatorSMReadOnly / SMWriteOnly / SMOneToAll 仅单节点用例使用，多节点注册表不涉及。</li>
+    </ul>
+  </div>
+  <h2 id="sec-ddt">二、MultinodeDeviceToDeviceTransfer 精读（1 对 1 读写）</h2>
+  <h3 id="sec-summary" style="font-size:19px; margin:26px 0 12px; color:var(--a);">2.1 函数功能总结</h3>
+  <div class="card">
+    <p><b class="k">一句话职责：</b>对 worldSize 个 rank 的<b>每一对有序组合 (first, second)</b>，测量"以 first 所在 GPU 为发起者、second 为对端"的跨节点拷贝带宽——Write 测 first 的<b>推出</b>带宽（PREFER_SRC），Read 测 first 的<b>拉入</b>带宽（PREFER_DST），最终填出一张 worldSize × worldSize 的带宽矩阵。</p>
+    <ul>
+      <li><b>谁在跑：</b>4 个 rank 执行<b>完全相同</b>的 run() 代码，没有角色分支——分工由 dispatchMemcpy 的"标注-认领"结果自然产生（执行者满清单，旁观者空清单）。</li>
+      <li><b>数据从哪来：</b>pair 列表由 rank0 生成后广播（generateTestPairs 静态缓存，仅首次计算）。</li>
+      <li><b>内存从哪来：</b>每对临时构造两个 Unicast 缓冲，owner 创建物理显存、全员通过 fabric 句柄映射，用完即析构。</li>
+      <li><b>MPI 用在哪：</b>只用于"对齐"和"传话"（Barrier / Bcast / Iprobe 心跳）；数据搬运本身全程走 GPU（SM/CE/TMA + NVLink），毫秒级起跑对齐靠共享显存闸门而非网络。</li>
+      <li><b>每对 MPI 账目：</b>3 次 Bcast（src 构造 + dst 构造 + 结果广播）+ 10 次 Barrier（构造 2 + 采样 3×2 + 析构 2，另有一次列表生成期的 Barrier）。</li>
+    </ul>
+  </div>
+
+  <h3 id="sec-table" style="font-size:19px; margin:34px 0 12px; color:var(--a);">2.2 流程阶段总结表</h3>
+  <p style="margin:0 0 6px"><b class="k">表 3 · 单向 run() 的十个阶段（含 MPI 账目）</b></p>
+  <div class="tbl-wrap">
+  <table class="sum">
+    <tr>
+      <th>#</th><th>阶段</th><th>执行者</th><th>关键动作</th><th>MPI 开销</th><th>产出</th>
+    </tr>
+    <tr><td>1</td><td class="stage">初始化</td><td>所有 rank</td><td>建带宽矩阵；构造 MemcpyOperation（拷贝引擎 + NodeHelperMulti + 方向偏好）</td><td class="mpi">—</td><td>测量上下文就绪</td></tr>
+    <tr><td>2</td><td class="stage">pair 列表生成</td><td>rank0 生成，全员参与</td><td>生成/抽样全部有序对 → Barrier → 全员置位 pairsCalculated（防二次调用死锁）→ 广播列表</td><td class="mpi">1 Barrier + 2 Bcast（仅首次）</td><td>每个 rank 持有相同的 pair 列表</td></tr>
+    <tr><td>3</td><td class="stage">构造 srcNode</td><td>所有 rank（owner 分工）</td><td>owner：cuMemCreate → export；其他：import；全员：reserve → map → setAccess</td><td class="mpi">1 Bcast + 1 Barrier</td><td>全员映射、远端可见的显存</td></tr>
+    <tr><td>4</td><td class="stage">构造 peerNode</td><td>同上，owner = pair.second</td><td>同上</td><td class="mpi">1 Bcast + 1 Barrier</td><td>对端显存全员可见</td></tr>
+    <tr><td>5</td><td class="stage">派发 dispatchMemcpy</td><td>所有 rank 独立计算</td><td>标注（偏好定执行者 = pair.first 的 rank）→ 认领（标注值 == 自己编号才收活）→ 记 master（未过滤表首元素）</td><td class="mpi">0（无通信分活）</td><td>执行者满清单 / 空闲者空清单 + 全员同值 master</td></tr>
+    <tr><td>6</td><td class="stage">采样执行 × 3 轮</td><td>执行者干活，空闲者站台</td><td>Barrier → 填校验 pattern → 入队 spin 闸门 + warmup → startEvent → 拷贝 × loopCount → endEvent → 释放闸门 → 等流（Iprobe 心跳）→ Barrier → memcmp 校验 → event 算带宽</td><td class="mpi">每轮 2 Barrier</td><td>执行者手里的带宽统计</td></tr>
+    <tr><td>7</td><td class="stage">结果归集</td><td>master 广播，全员接收</td><td>calculateFirstBandwidth：master 出真数据并 Bcast</td><td class="mpi">1 Bcast</td><td>全员拿到同一个返回值</td></tr>
+    <tr><td>8</td><td class="stage">写矩阵</td><td>所有 rank</td><td>value(first, second) = 返回值（行 = 发起者，列 = 对端）</td><td class="mpi">—</td><td>矩阵填入一格</td></tr>
+    <tr><td>9</td><td class="stage">析构</td><td>所有 rank</td><td>两个缓冲各：Barrier → unmap → release → addressFree</td><td class="mpi">2 Barrier</td><td>显存与映射全部释放</td></tr>
+    <tr><td>10</td><td class="stage">循环 / 收尾</td><td>所有 rank</td><td>取下一对（如 (1,3)），角色随 pair 数据自动切换；全部跑完后 recordStability、输出矩阵</td><td class="mpi">—</td><td>完整带宽矩阵 + 稳定性指标</td></tr>
+  </table>
+  </div>
+
+  <h3 id="sec-run-flow" style="font-size:19px; margin:34px 0 12px; color:var(--a);">2.3 run() 流程图</h3>
+  <div class="legend">
+    <span><i style="background:#e8eff7;border-color:#2f5d8a"></i>所有 rank 相同动作</span>
+    <span><i style="background:#f2eafa;border-color:#7b3fa0"></i>含 MPI 通信</span>
+    <span><i style="background:#e6f4ea;border-color:#2e7d4f"></i>派发 / 执行者干活</span>
+    <span><i style="background:#f4f5f7;border-color:#9aa0a6;border-style:dashed"></i>空闲 rank 旁路</span>
+    <span><i style="background:#fbeee1;border-color:#b5651d"></i>资源清理</span>
+    <span><i style="background:#fff8e1;border-color:#d9b64a"></i>判断</span>
+  </div>
+
+  <div class="card">
+  <p style="margin:0 0 6px"><b class="k">图 1 · 单向 run() 全流程（pair (0,2) 示例）</b></p>
+  <svg viewBox="0 0 1160 1680" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+      </marker>
+    </defs>
+
+    <!-- ===== N1 start pill ===== -->
+    <rect x="150" y="20" width="480" height="52" rx="26" fill="#2f5d8a"/>
+    <text x="390" y="53" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="600">开始：mpirun 启动 4 个 rank · 全部进入 run()</text>
+    <line x1="390" y1="72" x2="390" y2="94" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- ===== N2 init ===== -->
+    <rect x="200" y="98" width="380" height="116" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="124" font-size="15" font-weight="700" fill="#2f5d8a">① 初始化（所有 rank）</text>
+    <text x="215" y="149" font-size="13" fill="#1a1a1a">建带宽矩阵 worldSize × worldSize</text>
+    <text x="215" y="171" font-size="13" fill="#1a1a1a">构造 MemcpyOperation：拷贝引擎(SM/CE/TMA)</text>
+    <text x="215" y="193" font-size="13" fill="#1a1a1a">+ NodeHelperMulti + 偏好(Write=SRC / Read=DST)</text>
+    <line x1="390" y1="214" x2="390" y2="252" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- ===== N3 pairs ===== -->
+    <rect x="200" y="256" width="380" height="110" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="282" font-size="15" font-weight="700" fill="#7b3fa0">② generateTestPairs（所有 rank）</text>
+    <text x="215" y="307" font-size="13" fill="#1a1a1a">rank0 生成全部有序对（或抽样）</text>
+    <text x="215" y="329" font-size="13" fill="#1a1a1a">Barrier → 全员置位 pairsCalculated（防死锁）</text>
+    <text x="215" y="351" font-size="13" fill="#1a1a1a">广播列表 → 每个 rank 持有相同 pair 列表</text>
+    <line x1="390" y1="366" x2="390" y2="404" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- ===== N4 loop head ===== -->
+    <rect x="200" y="408" width="380" height="44" rx="22" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="390" y="436" text-anchor="middle" font-size="14.5" font-weight="600" fill="#2f5d8a">③ 取下一对 pair（首对 (0, 2)）</text>
+    <line x1="390" y1="452" x2="390" y2="492" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- ===== N5 srcNode ===== -->
+    <rect x="200" y="496" width="380" height="110" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="522" font-size="15" font-weight="700" fill="#7b3fa0">④ 构造 srcNode（owner = first = rank0）</text>
+    <text x="215" y="547" font-size="13" fill="#1a1a1a">owner：cuMemCreate → export 句柄</text>
+    <text x="215" y="569" font-size="13" fill="#1a1a1a">Bcast → 其他 rank import → 全员 map / setAccess</text>
+    <text x="215" y="591" font-size="13" fill="#1a1a1a">收尾 Barrier（每对象：1 Bcast + 1 Barrier）</text>
+    <line x1="390" y1="606" x2="390" y2="644" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- ===== N6 peerNode ===== -->
+    <rect x="200" y="648" width="380" height="86" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="674" font-size="15" font-weight="700" fill="#7b3fa0">⑤ 构造 peerNode（owner = second = rank2）</text>
+    <text x="215" y="699" font-size="13" fill="#1a1a1a">流程同 ④，是另一块独立显存</text>
+    <text x="215" y="721" font-size="13" fill="#1a1a1a">构造阶段累计：2 Bcast + 2 Barrier</text>
+    <line x1="390" y1="734" x2="390" y2="772" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- ===== N7 dispatch ===== -->
+    <rect x="200" y="776" width="380" height="110" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.5"/>
+    <text x="215" y="802" font-size="15" font-weight="700" fill="#2e7d4f">⑥ dispatchMemcpy（零 MPI，所有 rank 同算）</text>
+    <text x="215" y="827" font-size="13" fill="#1a1a1a">标注：偏好定执行者 = pair.first 的 rank(0)</text>
+    <text x="215" y="849" font-size="13" fill="#1a1a1a">认领：标注值 == 自己编号(rank) 才收活</text>
+    <text x="215" y="871" font-size="13" fill="#1a1a1a">记 master = 未过滤表首元素（全员同值）</text>
+
+    <!-- split arrows -->
+    <line x1="390" y1="886" x2="390" y2="906" stroke="#6b7280" stroke-width="2"/>
+    <line x1="265" y1="906" x2="875" y2="906" stroke="#6b7280" stroke-width="2"/>
+    <line x1="265" y1="906" x2="265" y2="924" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+    <line x1="875" y1="906" x2="875" y2="924" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="150" y="899" font-size="12.5" fill="#2e7d4f" font-weight="600">认领到任务</text>
+    <text x="890" y="899" font-size="12.5" fill="#8a8f98" font-weight="600">清单为空</text>
+
+    <!-- ===== N8A executor ===== -->
+    <rect x="30" y="928" width="470" height="180" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.8"/>
+    <text x="45" y="954" font-size="15" font-weight="700" fill="#2e7d4f">⑦A 执行者 rank0：doMemcpyCore</text>
+    <text x="45" y="979" font-size="13" fill="#1a1a1a">建 stream + start/end event（按任务数开槽）</text>
+    <text x="45" y="1001" font-size="13" fill="#1a1a1a">采样 ×3 { Barrier → 填 pattern → spin 卡门 + warmup</text>
+    <text x="45" y="1023" font-size="13" fill="#1a1a1a">→ 拷贝 × loopCount → release 闸门 → 等流(Iprobe 心跳)</text>
+    <text x="45" y="1045" font-size="13" fill="#1a1a1a">→ Barrier → memcmp 校验 → event 算带宽 }</text>
+    <text x="45" y="1067" font-size="13" fill="#1a1a1a">calculateFirstBandwidth：Bcast 发出真成绩</text>
+    <text x="45" y="1089" font-size="12.5" fill="#5f6368">（闸门 = host 闩针 + 4B 共享显存 + spin kernel，不走网络）</text>
+
+    <!-- ===== N8B idle ===== -->
+    <rect x="660" y="928" width="430" height="180" rx="10" fill="#f4f5f7" stroke="#9aa0a6" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <text x="675" y="954" font-size="15" font-weight="700" fill="#8a8f98">⑦B 空闲 rank1 / 2 / 3</text>
+    <text x="675" y="979" font-size="13" fill="#1a1a1a">GPU 零操作（活清单为空，循环体 0 次进入）</text>
+    <text x="675" y="1001" font-size="13" fill="#1a1a1a">参与 Barrier 与闸门应答（保证全员对齐）</text>
+    <text x="675" y="1023" font-size="13" fill="#1a1a1a">等 master 释放闸门 → 接收 Bcast 真成绩</text>
+    <text x="675" y="1045" font-size="12.5" fill="#5f6368">（仍跑同样次数的采样轮，只是不碰 GPU）</text>
+
+    <!-- merge arrows -->
+    <line x1="265" y1="1108" x2="265" y2="1126" stroke="#6b7280" stroke-width="2"/>
+    <line x1="875" y1="1108" x2="875" y2="1126" stroke="#6b7280" stroke-width="2"/>
+    <line x1="265" y1="1126" x2="875" y2="1126" stroke="#6b7280" stroke-width="2"/>
+    <line x1="390" y1="1126" x2="390" y2="1144" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- ===== N9 write matrix ===== -->
+    <rect x="200" y="1148" width="380" height="82" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="1174" font-size="15" font-weight="700" fill="#2f5d8a">⑧ 写矩阵（所有 rank）</text>
+    <text x="215" y="1199" font-size="13" fill="#1a1a1a">value(first, second) = 同一个返回值</text>
+    <text x="215" y="1221" font-size="13" fill="#1a1a1a">行 = 发起者，列 = 对端（Write 测推 / Read 测拉）</text>
+    <line x1="390" y1="1230" x2="390" y2="1268" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- ===== N10 destruct ===== -->
+    <rect x="200" y="1272" width="380" height="88" rx="10" fill="#fbeee1" stroke="#b5651d" stroke-width="1.5"/>
+    <text x="215" y="1298" font-size="15" font-weight="700" fill="#b5651d">⑨ srcNode / peerNode 析构（所有 rank）</text>
+    <text x="215" y="1323" font-size="13" fill="#1a1a1a">每个对象：Barrier → unmap → release → addressFree</text>
+    <text x="215" y="1345" font-size="13" fill="#1a1a1a">两个对象共 2 次 Barrier</text>
+    <line x1="390" y1="1360" x2="390" y2="1400" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- ===== N11 decision ===== -->
+    <polygon points="390,1404 510,1442 390,1480 270,1442" fill="#fff8e1" stroke="#d9b64a" stroke-width="1.5"/>
+    <text x="390" y="1448" text-anchor="middle" font-size="14.5" font-weight="600" fill="#8a5a12">还有 pair？</text>
+
+    <!-- no branch -->
+    <line x1="390" y1="1480" x2="390" y2="1540" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="400" y="1515" font-size="13" fill="#5f6368" font-weight="600">否</text>
+
+    <!-- yes loop back (right side) -->
+    <line x1="510" y1="1442" x2="1120" y2="1442" stroke="#2e7d4f" stroke-width="2"/>
+    <line x1="1120" y1="1442" x2="1120" y2="430" stroke="#2e7d4f" stroke-width="2"/>
+    <line x1="1120" y1="430" x2="584" y2="430" stroke="#2e7d4f" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="530" y="1432" font-size="13" fill="#2e7d4f" font-weight="700">是</text>
+    <text transform="rotate(90 1140 940)" x="1140" y="940" text-anchor="middle" font-size="12.5" fill="#2e7d4f" font-weight="600">下一对 pair（如 (1,3)：执行者自动变为 rank1，角色随 pair 数据切换，无切换代码）</text>
+
+    <!-- ===== N12 finish ===== -->
+    <rect x="200" y="1544" width="380" height="90" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="1570" font-size="15" font-weight="700" fill="#2f5d8a">⑩ 收尾（所有 rank）</text>
+    <text x="215" y="1595" font-size="13" fill="#1a1a1a">recordStability（跨采样稳定性 CV）</text>
+    <text x="215" y="1617" font-size="13" fill="#1a1a1a">输出矩阵，标签：发起者 -&gt; / &lt;- 对端 (GB/s)</text>
+  </svg>
+  </div>
+
+  <div class="note">
+    <b>每对 pair 的 MPI 账目：</b>构造 2 Bcast + 2 Barrier　→　派发 0　→　采样 3 轮 × 2 Barrier = 6 Barrier　→　结果 1 Bcast　→　析构 2 Barrier。
+    合计 <b>3 Bcast + 10 Barrier</b>。数据搬运本身零 MPI——全部由 GPU 通过 NVLink / fabric 映射完成，MPI 只负责对齐与传话。
+  </div>
+
+  <h3 id="sec-pairs-flow" style="font-size:19px; margin:34px 0 12px; color:var(--a);">2.4 generateTestPairs 流程图</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p><b class="k">函数职责：</b>为整次运行生成"测哪些 pair"的有序列表。三种产出模式：<b>全量</b>（targetNumPairs = -1 或恰好等于全对数，返回 W×(W-1) 全部有序对；超过全对数的取值在启动校验时直接报错）与<b>抽样</b>（目标数小于全对数，两遍挑选：先保证每张卡至少出现一次，再随机补足）。结果存函数级 static 缓存，<b>所有测试用例共享同一份</b>（所以只在第一次调用时真正计算）。全程只有 rank0 计算，其余 rank 只在 Barrier 等待并接收广播。</p>
+    <p><b class="k">targetNumPairs 从哪来、默认是多少：</b>来自命令行 <code>-P / --targetNumPairs N</code>，<b>不设置时默认 -1（即测全部 pair）</b>（定义于 test_settings.h 的 kDefaultTargetPairs）。取值含义：</p>
+    <ul>
+      <li><b>-1（默认）</b>：视为全对数 W×(W-1)，全量测试，不做抽样</li>
+      <li><b>0</b>：直接返回空列表（不测任何 pair）</li>
+      <li><b>1 ~ 全对数-1</b>：进入抽样模式，只测 N 对</li>
+      <li><b>&lt;-1 或 &gt;全对数</b>：启动时参数校验直接报错退出（nvbandwidth.cpp）</li>
+    </ul>
+    <p><b class="k">两个静态缓存列表的含义：</b></p>
+    <ul>
+      <li><b>allValidPairs（全量表）</b>：worldSize × (worldSize-1) 个有序对 (src, dst)（src ≠ dst），即"测试的完整宇宙"；生成后用固定种子 0xBAADF00D 洗牌，只影响执行顺序、不影响覆盖面。非抽样模式下它就是最终测试列表。</li>
+      <li><b>selectedPairs（抽样表）</b>：当目标对数 &lt; 全对数时，从全量表中挑出的子集；两遍挑选保证小样本下每张 GPU 仍至少出现在一个 pair 里。抽样模式下它才是最终测试列表。全量模式下它保持为空、不被使用。</li>
+    </ul>
+    <p><b class="k">返回值示例（worldSize = 4，默认全量模式）：</b>全量表共 4 × 3 = 12 个有序对，洗牌后的执行顺序形如（顺序为示意，实际由固定种子 0xBAADF00D 决定）：</p>
+    <ul>
+      <li><code>(0,2) → (3,1) → (1,3) → (2,0) → (0,3) → (3,2) → (1,0) → (2,3) → (3,0) → (0,1) → (2,1) → (1,2)</code></li>
+      <li><b>第一对 (0,2) 即 2.3 流程图贯穿使用的例子</b>：srcNode owner = rank0、peerNode owner = rank2（成员逐 rank 对比见 2.5），执行者为 rank0；这一对完整跑完（构造 → 采样 → 写矩阵 → 析构）后才进入下一对 (3,1)，直到 12 对全部完成</li>
+      <li>抽样模式示例（<code>-P 4</code>）：只返回 4 对，形如 <code>{(0,2), (1,3), (3,0), (2,1)}</code>——两遍挑选保证 0/1/2/3 每张卡都至少出现一次</li>
+    </ul>
+    <p><b class="k">关键行（multinode_memcpy.cpp L328）：</b>Barrier 之后<b>所有 rank</b>（不只是 rank0）都要置位 pairsCalculated。若漏掉：第二次调用时 rank0 在缓存检查处提前返回，而非 rank0 会落到 Barrier 死等——两侧分支不对称，直接死锁。</p>
+  </div>
+  <div class="legend">
+    <span><i style="background:#e8eff7;border-color:#2f5d8a"></i>所有 rank 相同动作</span>
+    <span><i style="background:#f2eafa;border-color:#7b3fa0"></i>含 MPI 通信</span>
+    <span><i style="background:#e6f4ea;border-color:#2e7d4f"></i>计算 / 返回</span>
+    <span><i style="background:#fff8e1;border-color:#d9b64a"></i>判断</span>
+  </div>
+  <div class="card">
+  <p style="margin:0 0 6px"><b class="k">图 2 · generateTestPairs 对子生成流程</b></p>
+  <svg viewBox="0 0 1160 1520" xmlns="http://www.w3.org/2000/svg">
+      <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+      </marker>
+    </defs>
+
+    <!-- ===== N1 entry pill ===== -->
+    <rect x="150" y="20" width="480" height="52" rx="26" fill="#2f5d8a"/>
+    <text x="390" y="53" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="600">所有 rank 调用 generateTestPairs(worldSize, 目标对数)</text>
+    <line x1="390" y1="72" x2="390" y2="108" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+
+    <!-- ===== N2 preprocess ===== -->
+    <rect x="200" y="112" width="380" height="96" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="138" font-size="15" font-weight="700" fill="#2f5d8a">预处理</text>
+    <text x="215" y="163" font-size="13" fill="#1a1a1a">目标数 == 0 → 直接返回 {}（空列表）</text>
+    <text x="215" y="185" font-size="13" fill="#1a1a1a">== -1 → 补为全对数 W × (W-1)</text>
+    <text x="215" y="207" font-size="13" fill="#1a1a1a">useDecisionSampling = 目标数 &lt; 全对数？</text>
+    <line x1="390" y1="208" x2="390" y2="246" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+
+    <!-- ===== N3 diamond 1 ===== -->
+    <polygon points="390,250 520,300 390,350 260,300" fill="#fff8e1" stroke="#d9b64a" stroke-width="1.5"/>
+    <text x="390" y="296" text-anchor="middle" font-size="13.5" fill="#8a5a12">已算过(pairsCalculated)</text>
+    <text x="390" y="316" text-anchor="middle" font-size="13.5" fill="#8a5a12">且非抽样模式？</text>
+    <line x1="520" y1="300" x2="696" y2="300" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="535" y="290" font-size="13" fill="#2e7d4f" font-weight="700">是</text>
+    <line x1="390" y1="350" x2="390" y2="388" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="398" y="374" font-size="13" fill="#5f6368" font-weight="600">否</text>
+
+    <!-- R1 cache hit -->
+    <rect x="700" y="268" width="380" height="64" rx="26" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.5"/>
+    <text x="890" y="296" text-anchor="middle" font-size="14" font-weight="600" fill="#2e7d4f">return 静态缓存 allValidPairs</text>
+    <text x="890" y="318" text-anchor="middle" font-size="12.5" fill="#5f6368">（非抽样：整次运行只有这一份列表）</text>
+
+    <!-- ===== N4 diamond 2 ===== -->
+    <polygon points="390,392 530,446 390,500 250,446" fill="#fff8e1" stroke="#d9b64a" stroke-width="1.5"/>
+    <text x="390" y="442" text-anchor="middle" font-size="13.5" fill="#8a5a12">已算过 && 抽样模式</text>
+    <text x="390" y="462" text-anchor="middle" font-size="13.5" fill="#8a5a12">&& selectedPairs 非空？</text>
+    <line x1="530" y1="446" x2="696" y2="446" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="545" y="436" font-size="13" fill="#2e7d4f" font-weight="700">是</text>
+    <line x1="390" y1="500" x2="390" y2="538" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="398" y="524" font-size="13" fill="#5f6368" font-weight="600">否</text>
+
+    <!-- R2 cache hit -->
+    <rect x="700" y="414" width="380" height="64" rx="26" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.5"/>
+    <text x="890" y="442" text-anchor="middle" font-size="14" font-weight="600" fill="#2e7d4f">return 静态缓存 selectedPairs</text>
+    <text x="890" y="464" text-anchor="middle" font-size="12.5" fill="#5f6368">（抽样模式：首次挑好的子集）</text>
+
+    <!-- ===== N5 diamond 3 ===== -->
+    <polygon points="390,542 510,592 390,642 270,592" fill="#fff8e1" stroke="#d9b64a" stroke-width="1.5"/>
+    <text x="390" y="598" text-anchor="middle" font-size="13.5" fill="#8a5a12">worldRank == 0？</text>
+    <line x1="390" y1="642" x2="390" y2="680" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="398" y="666" font-size="13" fill="#2e7d4f" font-weight="700">是</text>
+
+    <!-- no bypass: to Barrier -->
+    <line x1="510" y1="592" x2="1000" y2="592" stroke="#6b7280" stroke-width="2"/>
+    <line x1="1000" y1="592" x2="1000" y2="980" stroke="#6b7280" stroke-width="2"/>
+    <line x1="1000" y1="980" x2="584" y2="980" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+    <text x="525" y="582" font-size="13" fill="#5f6368" font-weight="700">否（rank1/2/3）</text>
+    <text transform="rotate(90 1014 780)" x="1014" y="780" text-anchor="middle" font-size="12.5" fill="#5f6368">跳过计算，直接去 Barrier 等待 rank0</text>
+
+    <!-- ===== N6 rank0 compute ===== -->
+    <rect x="170" y="684" width="440" height="240" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.5"/>
+    <text x="185" y="710" font-size="15" font-weight="700" fill="#2e7d4f">rank0 独占：生成 + 抽样（仅首次）</text>
+    <text x="185" y="735" font-size="13" fill="#1a1a1a">双重循环生成全对 (src ≠ dst) → allValidPairs</text>
+    <text x="185" y="757" font-size="13" fill="#1a1a1a">固定种子 0xBAADF00D 洗牌（结果可复现）</text>
+    <text x="185" y="779" font-size="13" fill="#1a1a1a">useDecisionSampling == true 才执行两遍挑选：</text>
+    <text x="185" y="801" font-size="13" fill="#1a1a1a">　第一遍保证每张卡至少出现在一个 pair 里</text>
+    <text x="185" y="823" font-size="13" fill="#1a1a1a">　第二遍随机补足到目标数 → selectedPairs</text>
+    <text x="185" y="845" font-size="13" fill="#1a1a1a">本地置位 pairsCalculated = true</text>
+    <text x="185" y="875" font-size="12.5" fill="#5f6368">（抽样两遍确保：小样本也不漏测任何一张 GPU）</text>
+    <line x1="390" y1="924" x2="390" y2="940" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+
+    <!-- ===== N7 barrier ===== -->
+    <rect x="200" y="944" width="380" height="72" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="970" font-size="15" font-weight="700" fill="#7b3fa0">MPI_Barrier（仅首次调用走到这里）</text>
+    <text x="215" y="996" font-size="13" fill="#1a1a1a">全员置位 pairsCalculated = true ★关键行</text>
+    <line x1="390" y1="1016" x2="390" y2="1054" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+
+    <!-- ===== N8 select + bcast1 ===== -->
+    <rect x="200" y="1058" width="380" height="92" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="1084" font-size="15" font-weight="700" fill="#7b3fa0">选表 + Bcast ①：列表长度</text>
+    <text x="215" y="1109" font-size="13" fill="#1a1a1a">rank0：finalPairs = 抽样 ? selected : allValid</text>
+    <text x="215" y="1131" font-size="13" fill="#1a1a1a">广播长度 → 非 rank0 按长度预留空间</text>
+    <line x1="390" y1="1150" x2="390" y2="1188" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+
+    <!-- ===== N9 bcast2 ===== -->
+    <rect x="200" y="1192" width="380" height="88" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="1218" font-size="15" font-weight="700" fill="#7b3fa0">Bcast ②：平铺 int 数组</text>
+    <text x="215" y="1243" font-size="13" fill="#1a1a1a">rank0 把 (first, second) 展开成 int 序列</text>
+    <text x="215" y="1265" font-size="13" fill="#1a1a1a">全员接收同一份数据（避免结构体对齐问题）</text>
+    <line x1="390" y1="1280" x2="390" y2="1318" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+
+    <!-- ===== N10 deserialize ===== -->
+    <rect x="200" y="1322" width="380" height="88" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="1348" font-size="15" font-weight="700" fill="#2f5d8a">反序列化（非 rank0）</text>
+    <text x="215" y="1373" font-size="13" fill="#1a1a1a">两两还原成 pair 列表</text>
+    <text x="215" y="1395" font-size="13" fill="#1a1a1a">写回静态缓存 → 下次调用直接命中缓存</text>
+    <line x1="390" y1="1410" x2="390" y2="1446" stroke="#6b7280" stroke-width="2" marker-end="url(#arr2)"/>
+
+    <!-- ===== N11 return pill ===== -->
+    <rect x="150" y="1450" width="480" height="52" rx="26" fill="#2e7d4f"/>
+    <text x="390" y="1483" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="600">return finalPairs（全员持同一份列表）</text>
+  </svg>
+  </div>
+
+  <div class="note">
+    <b>本阶段的 MPI 账目：</b>仅首次调用产生 1 Barrier + 2 Bcast，之后所有测试用例、所有 pair 循环都直接命中静态缓存，零开销。抽样模式的意义：pair 数量可控（--pairs 参数），且两遍挑选保证小样本下每张 GPU 仍被测到。
+  </div>
+
+  <h3 id="sec-members" style="font-size:19px; margin:34px 0 12px; color:var(--a);">2.5 srcNode / peerNode 的构造逻辑</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p>拿到 pair 列表后（2.4 的产出），run() 对每一对临时构造 <code>srcNode(size, 0)</code> 和 <code>peerNode(size, 2)</code> 两个对象。每个对象分三层：<b>标签层</b>（owner 是谁）、<b>内存实体层</b>（组合的 MultinodeMemoryAllocationUnicast：VA、句柄、授权单）。两张表唯一的区别是 <b>owner 不同</b>（rank0 vs rank2），prop/desc 的数值规律完全一样（都是各自填本机卡号）。</p>
+    <p style="margin:14px 0 6px"><b class="k">表 4 · srcNode(size, 0)：物理显存在节点 A 的卡 0，owner = rank0</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:900px">
+      <tr><th>成员</th><th>rank0（owner）</th><th>rank1</th><th>rank2</th><th>rank3</th><th>一致性</th></tr>
+      <tr><td class="stage">MPI_rank（owner 标签）</td><td>0</td><td>0</td><td>0</td><td>0</td><td>完全相同（来自广播的 pair 列表）</td></tr>
+      <tr><td class="stage">bufferSize / 对齐后大小</td><td>512MB / 对齐值</td><td>同左</td><td>同左</td><td>同左</td><td>相同</td></tr>
+      <tr><td class="stage">buffer（虚拟地址 VA）</td><td colspan="4">各自 cuMemAddressReserve，<b>4 个进程 4 个不同值</b></td><td>各不相同</td></tr>
+      <tr><td class="stage">handle（物理显存凭证）</td><td>cuMemCreate 产物</td><td>import 产物</td><td>import 产物</td><td>import 产物</td><td><b>各不相同，但都指向同一块物理显存</b></td></tr>
+      <tr><td class="stage">fh（fabric 共享令牌）</td><td colspan="4">Bcast 收到的字节，完全相同（import 后使命完成）</td><td>字节相同</td></tr>
+      <tr><td class="stage">prop.location.id（分配需求单）</td><td>0</td><td>1</td><td>0</td><td>1</td><td>不同（各自填本机卡号）；<b>只有 owner 的 prop 真正参与 cuMemCreate</b></td></tr>
+      <tr><td class="stage">desc（访问授权）</td><td>0</td><td>1</td><td>0</td><td>1</td><td>不同——每人给<b>自己的 GPU</b> 做 setAccess</td></tr>
+    </table>
+    </div>
+    <p style="margin:18px 0 6px"><b class="k">表 5 · peerNode(size, 2)：物理显存在节点 B 的卡 0，owner = rank2</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:900px">
+      <tr><th>成员</th><th>rank0</th><th>rank1</th><th>rank2（owner）</th><th>rank3</th><th>一致性</th></tr>
+      <tr><td class="stage">MPI_rank（owner 标签）</td><td>2</td><td>2</td><td>2</td><td>2</td><td>完全相同（来自广播的 pair 列表）</td></tr>
+      <tr><td class="stage">bufferSize / 对齐后大小</td><td>512MB / 对齐值</td><td>同左</td><td>同左</td><td>同左</td><td>相同</td></tr>
+      <tr><td class="stage">buffer（虚拟地址 VA）</td><td colspan="4">各自 cuMemAddressReserve，<b>4 个进程 4 个不同值</b>（与 srcNode 的 VA 互不相关，是另一次独立 reserve）</td><td>各不相同</td></tr>
+      <tr><td class="stage">handle（物理显存凭证）</td><td>import 产物</td><td>import 产物</td><td>cuMemCreate 产物</td><td>import 产物</td><td><b>各不相同，但都指向节点 B 卡 0 的同一块物理显存</b></td></tr>
+      <tr><td class="stage">fh（fabric 共享令牌）</td><td colspan="4">Bcast（root = rank2）收到的字节，完全相同（import 后使命完成）</td><td>字节相同</td></tr>
+      <tr><td class="stage">prop.location.id（分配需求单）</td><td>0</td><td>1</td><td>0</td><td>1</td><td>不同（各自填本机卡号）；<b>只有 rank2 的 prop 真正参与 cuMemCreate</b>——在节点 B 的卡 0 上分配</td></tr>
+      <tr><td class="stage">desc（访问授权）</td><td>0</td><td>1</td><td>0</td><td>1</td><td>不同——每人给<b>自己的 GPU</b> 做 setAccess</td></tr>
+    </table>
+    </div>
+    <ul style="margin-top:12px">
+      <li><b>标签人人相同，实体各持一份：</b>owner 是谁来自广播的 pair，必然一致（dispatch 认领靠它）；而 VA 和 handle 是进程本地资源，CUDA 不可能让两个进程共用同一个值。</li>
+      <li><b>"4 个不同 handle、4 个不同 VA → 同一块物理显存"正是 fabric 机制的产出：</b>物理只有一份，映射有四份。</li>
+      <li><b>prop / desc 的不同是刻意设计：</b>desc 用自己的 GPU id 做授权（READWRITE），4 次授权凑齐"全网可访问"——所以 4 个 rank 其实都能读写这块内存，只是派发机制保证非执行者从不碰它。</li>
+    </ul>
+    <p style="margin-top:10px"><b class="k">一句话：</b>srcNode 与 peerNode 都是<b>分布式对象</b>——全员持有相同的 owner 标签与大小，但各持一份指向同一块物理显存的本地 VA + 本地 handle；两者唯一的区别是 owner 不同（rank0 vs rank2），物理显存分别落在节点 A 卡 0 与节点 B 卡 0 上。</p>
+    <p style="margin:18px 0 6px"><b class="k">构造执行完后，到底发生了什么？</b></p>
+    <ul>
+      <li><b>物理显存只有两块：</b>rank0 在节点 A 卡 0 上 <code>cuMemCreate</code> 一块（srcNode，512MB 向上取整对齐），rank2 在节点 B 卡 0 上 <code>cuMemCreate</code> 另一块（peerNode）。</li>
+      <li><b>跨进程传递的是 fabric 句柄 fh：</b>Bcast 的载荷是 64 字节的 <code>CUmemFabricHandle</code>。其他 rank 拿 fh <code>cuMemImportFromShareableHandle</code> 换出自己的 handle 后，各自 <code>cuMemAddressReserve</code> 一个本地 VA，把同一块物理显存 <code>cuMemMap</code> 进自己的虚拟地址空间，再用 <code>cuMemSetAccess</code> 给自己的 GPU 发 READWRITE 授权。</li>
+      <li><b>每个 rank 映射出的是自己的地址：</b>4 个进程对同一块物理显存各持一个不同的本地 VA（见表 4/表 5）——CUDA 不允许两个进程共用同一个虚拟地址值，共享的载体是物理页，不是 VA。</li>
+    </ul>
+    <p style="margin:14px 0 6px"><b class="k">表 6 · pair (0,2) 构造完成后的映射状态（物理 2 份 · 映射 8 份）</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:900px">
+      <tr><th>构造完成后（pair 0,2）</th><th>rank0（节点 A）</th><th>rank1（节点 A）</th><th>rank2（节点 B）</th><th>rank3（节点 B）</th></tr>
+      <tr><td class="stage">srcNode 物理显存（节点 A 卡 0）</td><td><b>本机，自己 create</b></td><td>映射，NVLink 跨节点可达</td><td>映射，NVLink 跨节点可达</td><td>映射，NVLink 跨节点可达</td></tr>
+      <tr><td class="stage">peerNode 物理显存（节点 B 卡 0）</td><td>映射，NVLink 跨节点可达</td><td>映射，NVLink 跨节点可达</td><td><b>本机，自己 create</b></td><td>映射，NVLink 跨节点可达</td></tr>
+      <tr><td class="stage">自己的 GPU 对两块显存</td><td colspan="4">均持 READWRITE 授权（setAccess 各自做，共 4 rank × 2 块 = 8 次）——后续可直接跨节点跨 device 读写</td></tr>
+    </table>
+    </div>
+    <ul style="margin-top:12px">
+      <li><b>这就是为后续拷贝铺的路：</b>构造结束后，执行者（rank0）在 doMemcpyCore 里直接拿 srcNode 的本地 VA 当源、peerNode 的本地 VA 当目标发起 SM/CE 拷贝，数据自动走 NVLink 跨节点传输——<b>搬运全程零 MPI</b>，MPI 只在构造期的句柄传递（Bcast）和屏障对齐（Barrier）中出场。</li>
+      <li><b>显存倍增关系：</b>每对 pair 实际只占 <b>2 × bufferSize</b> 的物理显存（src 一块 + peer 一块），但每个进程的虚拟地址空间里都出现两个映射——"物理两份、映射八份（4 进程 × 2 块）"。</li>
+    </ul>
+  </div>
+
+  <h3 id="sec-domemcpy" style="font-size:19px; margin:34px 0 12px; color:var(--a);">2.6 doMemcpy：派发之后怎么执行</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p><b class="k">调用链：</b>run() 中的 <code>memcpyInstance.doMemcpy(peerNode, srcNode)</code>（multinode_testcases.cpp L64，READ 方向时两个实参对调）→ 单 buffer 重载把两个 buffer 包成单元素 vector（memcpy.cpp L352-356）→ vector 版做两件事：<b>dispatchMemcpy 派发</b>（2.3 的⑥）+ <b>doMemcpyCore 执行采样</b>，最后返回 result[0]（L434-438）。</p>
+    <ul>
+      <li><b>一句话职责：</b>在派发结果之上完成"采样 × 3 轮，每轮入队闸门 + warmup + 正式拷贝 × loopCount → 放行 → 校验 → event 算带宽"的完整测量，返回本用例口径（FIRST/SUM/TOTAL/VECTOR）的最终带宽数值。</li>
+      <li><b>谁在干活：</b>4 个 rank 执行同一份 doMemcpyCore 代码，靠 <code>info.srcBuffers.size()</code> 分活——执行者 rank0 清单长度 1，所有 for 循环进 1 次；空闲 rank1/2/3 长度 0，循环体 0 次进入，但 totalEnd 照建、Barrier 与闸门义务照履行。</li>
+      <li><b>两级循环：</b>外层 averageLoopCount（默认 3）轮采样（跨轮统计均值与稳定性），内层 loopCount（默认 16）次拷贝（单轮测量内反复搬运）。</li>
+      <li><b>起跑对齐：</b>先把 spin 闸门 kernel 和拷贝全部入队（流被闸门卡住不动），再由 host 一次性 release——所有 GPU 同一瞬间开跑，消除 host 逐条入队的抖动。</li>
+      <li><b>计时方式：</b>CUDA event 对（startEvents[i] / endEvents[i]），带宽 = adjustedCopySize × loopCount ÷ 耗时；SM 拷贝可能截断尺寸，所以用 getAdjustedCopySize 返回的实际值。</li>
+    </ul>
+  </div>
+  <div class="legend">
+    <span><i style="background:#e8eff7;border-color:#2f5d8a"></i>准备 / 计算</span>
+    <span><i style="background:#f2eafa;border-color:#7b3fa0"></i>含 MPI 通信</span>
+    <span><i style="background:#e6f4ea;border-color:#2e7d4f"></i>GPU 执行路径</span>
+    <span><i style="background:#fbeee1;border-color:#b5651d"></i>资源清理</span>
+    <span><i style="background:#fff8e1;border-color:#d9b64a"></i>判断</span>
+  </div>
+  <div class="card">
+  <p style="margin:0 0 6px"><b class="k">图 3 · doMemcpy 执行流程</b></p>
+  <svg viewBox="0 0 1160 1600" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+      </marker>
+    </defs>
+
+    <!-- N1 start pill -->
+    <rect x="150" y="20" width="480" height="52" rx="26" fill="#2f5d8a"/>
+    <text x="390" y="53" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="600">开始：doMemcpy(peerNode, srcNode)（所有 rank 同时进入）</text>
+    <line x1="390" y1="72" x2="390" y2="96" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- N2 dispatch -->
+    <rect x="200" y="100" width="380" height="96" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="126" font-size="15" font-weight="700" fill="#7b3fa0">① dispatchMemcpy 派发（零 MPI）</text>
+    <text x="215" y="151" font-size="13" fill="#1a1a1a">标注-认领（同 2.3 ⑥）</text>
+    <text x="215" y="173" font-size="13" fill="#1a1a1a">执行者 rank0 清单长度 1 / 空闲 rank 长度 0</text>
+    <line x1="390" y1="196" x2="390" y2="220" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- N3 prepare -->
+    <rect x="200" y="224" width="380" height="110" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="250" font-size="15" font-weight="700" fill="#2f5d8a">② 资源准备（按任务数开槽，仅执行者）</text>
+    <text x="215" y="275" font-size="13" fill="#1a1a1a">每任务：ctx 绑定 → stream(NON_BLOCKING)</text>
+    <text x="215" y="297" font-size="13" fill="#1a1a1a">+ start/end event；getAdjustedCopySize（SM 截断）</text>
+    <text x="215" y="319" font-size="13" fill="#1a1a1a">全员：创建 totalEnd（空闲 rank 也要，简化代码）</text>
+    <line x1="390" y1="334" x2="390" y2="356" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- N4 loop header -->
+    <rect x="200" y="360" width="380" height="44" rx="22" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="390" y="388" text-anchor="middle" font-size="14.5" font-weight="600" fill="#2f5d8a">③ 采样循环 × 3（averageLoopCount，默认 3）</text>
+    <line x1="390" y1="404" x2="390" y2="426" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- S1 barrier+reset -->
+    <rect x="200" y="430" width="380" height="64" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="454" font-size="14" font-weight="700" fill="#7b3fa0">a. Barrier ① + streamBlockerReset</text>
+    <text x="215" y="476" font-size="13" fill="#1a1a1a">全员对齐 + 闸门归零</text>
+    <line x1="390" y1="494" x2="390" y2="514" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- S2 memset -->
+    <rect x="200" y="518" width="380" height="46" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="546" font-size="14" font-weight="700" fill="#2f5d8a">b. memsetPattern：往 src/dst 写校验 pattern</text>
+    <line x1="390" y1="564" x2="390" y2="584" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- S3 enqueue gate+warmup -->
+    <rect x="200" y="588" width="380" height="88" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.5"/>
+    <text x="215" y="612" font-size="14" font-weight="700" fill="#2e7d4f">c. 入队（GPU 尚未真正执行）</text>
+    <text x="215" y="636" font-size="13" fill="#1a1a1a">spin 闸门 kernel 卡住流（共享显存闩针）</text>
+    <text x="215" y="658" font-size="13" fill="#1a1a1a">warmup 拷贝 × WARMUP_COUNT（校验传 nullptr 不污染）</text>
+    <line x1="390" y1="676" x2="390" y2="696" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- S4 start events -->
+    <rect x="200" y="700" width="380" height="64" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="724" font-size="14" font-weight="700" fill="#2f5d8a">d. 记 startEvents[0]；i≥1 流 waitEvent 对齐</text>
+    <text x="215" y="746" font-size="13" fill="#1a1a1a">（1 对 1 仅 1 个任务，此环节退化）</text>
+    <line x1="390" y1="764" x2="390" y2="784" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- S5 copies -->
+    <rect x="200" y="788" width="380" height="64" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.5"/>
+    <text x="215" y="812" font-size="14" font-weight="700" fill="#2e7d4f">e. 入队正式拷贝 × loopCount 次</text>
+    <text x="215" y="834" font-size="13" fill="#1a1a1a">记 endEvents[i] + totalEnd（TOTAL_BW 时 stream0 等其他流）</text>
+    <line x1="390" y1="852" x2="390" y2="872" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- S6 release -->
+    <rect x="200" y="876" width="380" height="64" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.8"/>
+    <text x="215" y="900" font-size="14" font-weight="700" fill="#2e7d4f">f. streamBlockerRelease：闸门开 ★</text>
+    <text x="215" y="922" font-size="13" fill="#1a1a1a">host 写闩针 1 → 排队拷贝真正开跑——消除 host 入队抖动</text>
+    <line x1="390" y1="940" x2="390" y2="960" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- S7 wait streams -->
+    <rect x="200" y="964" width="380" height="64" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="988" font-size="14" font-weight="700" fill="#7b3fa0">g. 等流完成 → Barrier ②</text>
+    <text x="215" y="1010" font-size="13" fill="#1a1a1a">多节点：Iprobe 心跳防 Barrier 死锁</text>
+    <line x1="390" y1="1028" x2="390" y2="1048" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- S8 verify -->
+    <rect x="200" y="1052" width="380" height="46" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="1080" font-size="14" font-weight="700" fill="#2f5d8a">h. memcmpPattern 校验（--skip-verification 可跳过）</text>
+    <line x1="390" y1="1098" x2="390" y2="1118" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- S9 bandwidth -->
+    <rect x="200" y="1122" width="380" height="64" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="1146" font-size="14" font-weight="700" fill="#2f5d8a">i. event 算耗时 → 单轮带宽</text>
+    <text x="215" y="1168" font-size="13" fill="#1a1a1a">带宽 = size × loopCount ÷ 耗时 → bandwidthStats[i]</text>
+    <line x1="390" y1="1186" x2="390" y2="1206" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- decision -->
+    <polygon points="390,1210 510,1248 390,1286 270,1248" fill="#fff8e1" stroke="#d9b64a" stroke-width="1.5"/>
+    <text x="390" y="1254" text-anchor="middle" font-size="14" font-weight="600" fill="#8a5a12">还有采样轮？</text>
+
+    <!-- yes loop back -->
+    <line x1="510" y1="1248" x2="1120" y2="1248" stroke="#2e7d4f" stroke-width="2"/>
+    <line x1="1120" y1="1248" x2="1120" y2="462" stroke="#2e7d4f" stroke-width="2"/>
+    <line x1="1120" y1="462" x2="584" y2="462" stroke="#2e7d4f" stroke-width="2" marker-end="url(#arr3)"/>
+    <text x="530" y="1238" font-size="13" fill="#2e7d4f" font-weight="700">是</text>
+    <text transform="rotate(90 1140 850)" x="1140" y="850" text-anchor="middle" font-size="12.5" fill="#2e7d4f" font-weight="600">下一轮采样：重置闸门再测一轮（共 3 轮，跨轮统计均值与 CV）</text>
+
+    <!-- no branch -->
+    <line x1="390" y1="1286" x2="390" y2="1318" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+    <text x="400" y="1308" font-size="13" fill="#5f6368" font-weight="600">否</text>
+
+    <!-- N10 cleanup -->
+    <rect x="200" y="1322" width="380" height="64" rx="10" fill="#fbeee1" stroke="#b5651d" stroke-width="1.5"/>
+    <text x="215" y="1346" font-size="14" font-weight="700" fill="#b5651d">④ 清理资源</text>
+    <text x="215" y="1368" font-size="13" fill="#1a1a1a">destroy totalEnd + 每任务 stream / start / end event</text>
+    <line x1="390" y1="1386" x2="390" y2="1406" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- N11 result -->
+    <rect x="200" y="1410" width="380" height="88" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="1436" font-size="15" font-weight="700" fill="#7b3fa0">⑤ 结果归集（按 bandwidthValue 分派）</text>
+    <text x="215" y="1461" font-size="13" fill="#1a1a1a">默认 FIRST_BW：calculateFirstBandwidth</text>
+    <text x="215" y="1483" font-size="13" fill="#1a1a1a">多节点版内部：master(rank0) Bcast 对账 → 全员同值</text>
+    <line x1="390" y1="1498" x2="390" y2="1518" stroke="#6b7280" stroke-width="2" marker-end="url(#arr3)"/>
+
+    <!-- N12 return pill -->
+    <rect x="150" y="1522" width="480" height="52" rx="26" fill="#2e7d4f"/>
+    <text x="390" y="1555" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="600">return result[0] → 回到 run() 写入矩阵 value(0, 2)</text>
+  </svg>
+  </div>
+
+  <div class="note">
+    <b>空闲 rank（1/2/3）在本函数内的表现：</b>任务清单长度 0 → 资源准备、入队、算带宽的 for 循环全部 0 次；但闸门复位/释放、2 次 Barrier、totalEnd 创建/销毁一一履行（等流循环 0 次——没有自己的流，直接进 Barrier），与执行者保持同节奏。<b>每轮采样 MPI 账目：2 Barrier</b>；结果归集 1 Bcast（藏在多节点版 calculateFirstBandwidth 内部）。
+  </div>
+
+  <h3 id="sec-dispatch" style="font-size:19px; margin:34px 0 12px; color:var(--a);">2.7 dispatchMemcpy：零通信的任务分活</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p><b class="k">函数职责（multinode_memcpy.cpp L383-416）：</b>输入<b>全量任务清单</b>（srcNodesUnfiltered / dstNodesUnfiltered，所有 rank 持有完全相同的一份）和上下文偏好，输出 MemcpyDispatchInfo——不发生任何 MPI 通信，4 个 rank 靠相同输入 + 相同代码各自独立推出一致的派发结论。</p>
+    <ul>
+      <li><b>三步机制：</b>① <b>标注</b>——给每个任务写上"该谁执行"（执行者的 MPI_rank + 其 CUDA context）；② <b>认领</b>——标注值等于自己 worldRank 的任务才收进活清单；③ <b>记 master</b>——取未过滤表首元素作为 rankOfFirstMemcpy（闸门 master 与结果 Bcast root）。</li>
+      <li><b>标注规则：</b>PREFER_SRC 且 src 有 ctx → 执行者 = src 的 owner；否则 dst 有 ctx → 执行者 = dst 的 owner。多节点路径的 getPrimaryCtx() 恒非空（Unicast/Local/Multicast 都走 cuDevicePrimaryCtxRetain），分支实际只由 ctxPreference 决定。</li>
+      <li><b>过滤即身份：</b>执行者收到满清单、空闲 rank 收到空清单——活清单的<b>长度</b>就是"我干不干活"的全部依据，下游 for 循环按长度自然分活，无需任何标志位。</li>
+      <li><b>-1 哨兵：</b>ranksUnfiltered 初始化为 -1，标注不到执行者的任务（host buffer 等无 ctx 场景）在认领阶段被自动丢弃——多节点 D2D 路径不会出现。</li>
+      <li><b>通用性：</b>1 对 1 = 1 个任务；多打一 / 一打多 = W-1 个任务（各 rank 各认领 1 个）；多打多 = 每 rank 认领多个——机制不变，只是清单更长。</li>
+    </ul>
+  </div>
+  <div class="card">
+  <p style="margin:0 0 6px"><b class="k">图 4 · dispatchMemcpy 零通信分活</b></p>
+  <svg viewBox="0 0 1160 790" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+      </marker>
+    </defs>
+
+    <!-- N1 start pill -->
+    <rect x="150" y="20" width="520" height="52" rx="26" fill="#2f5d8a"/>
+    <text x="410" y="53" text-anchor="middle" fill="#ffffff" font-size="15.5" font-weight="600">开始：dispatchMemcpy(src 全量, dst 全量, ctxPreference)（所有 rank 独立执行）</text>
+    <line x1="410" y1="72" x2="410" y2="96" stroke="#6b7280" stroke-width="2" marker-end="url(#arr4)"/>
+
+    <!-- N2 init -->
+    <rect x="200" y="100" width="380" height="72" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="124" font-size="14.5" font-weight="700" fill="#2f5d8a">① 初始化</text>
+    <text x="215" y="146" font-size="13" fill="#1a1a1a">ranksUnfiltered 全填 -1（无人认领哨兵）</text>
+    <text x="215" y="166" font-size="13" fill="#1a1a1a">contextsUnfiltered 按任务数开槽</text>
+    <line x1="390" y1="172" x2="390" y2="194" stroke="#6b7280" stroke-width="2" marker-end="url(#arr4)"/>
+
+    <!-- N3 label loop -->
+    <rect x="200" y="198" width="380" height="44" rx="22" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="390" y="226" text-anchor="middle" font-size="14.5" font-weight="600" fill="#2f5d8a">② 标注循环（i = 0 … 任务数-1）</text>
+    <line x1="390" y1="246" x2="390" y2="262" stroke="#6b7280" stroke-width="2" marker-end="url(#arr4)"/>
+
+    <!-- D1 diamond -->
+    <polygon points="390,266 540,314 390,362 240,314" fill="#fff8e1" stroke="#d9b64a" stroke-width="1.5"/>
+    <text x="390" y="310" text-anchor="middle" font-size="13.5" fill="#8a5a12">ctxPreference ==</text>
+    <text x="390" y="330" text-anchor="middle" font-size="13.5" fill="#8a5a12">PREFER_SRC ？</text>
+    <text x="80" y="318" font-size="12" fill="#5f6368">getPrimaryCtx 多节点恒非空，仅兜底</text>
+
+    <!-- yes branch -->
+    <line x1="540" y1="314" x2="600" y2="314" stroke="#6b7280" stroke-width="2" marker-end="url(#arr4)"/>
+    <text x="552" y="304" font-size="13" fill="#2e7d4f" font-weight="700">是</text>
+    <rect x="604" y="282" width="440" height="64" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.5"/>
+    <text x="619" y="306" font-size="14" font-weight="700" fill="#2e7d4f">标注：执行者 = src 的 MPI_rank + src 的 ctx</text>
+    <text x="619" y="330" font-size="13" fill="#1a1a1a">Write 场景：srcNode owner = pair.first（例：rank0）</text>
+
+    <!-- no branch -->
+    <line x1="390" y1="362" x2="390" y2="396" stroke="#6b7280" stroke-width="2" marker-end="url(#arr4)"/>
+    <text x="398" y="384" font-size="13" fill="#5f6368" font-weight="600">否</text>
+    <rect x="200" y="400" width="380" height="68" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.5"/>
+    <text x="215" y="424" font-size="14" font-weight="700" fill="#2e7d4f">标注：执行者 = dst 的 MPI_rank + dst 的 ctx</text>
+    <text x="215" y="446" font-size="13" fill="#1a1a1a">Read 场景：实参已对调，标注值仍是 pair.first 的 rank</text>
+
+    <!-- merge from right box -->
+    <line x1="824" y1="346" x2="824" y2="434" stroke="#6b7280" stroke-width="2"/>
+    <line x1="824" y1="434" x2="584" y2="434" stroke="#6b7280" stroke-width="2" marker-end="url(#arr4)"/>
+
+    <line x1="390" y1="468" x2="390" y2="490" stroke="#6b7280" stroke-width="2" marker-end="url(#arr4)"/>
+
+    <!-- N5 claim loop -->
+    <rect x="200" y="494" width="380" height="88" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="518" font-size="14.5" font-weight="700" fill="#2f5d8a">③ 认领循环</text>
+    <text x="215" y="540" font-size="13" fill="#1a1a1a">ranksUnfiltered[i] == worldRank 才收活</text>
+    <text x="215" y="562" font-size="13" fill="#1a1a1a">执行者：满清单 / 空闲 rank：空清单（长度即身份）</text>
+    <line x1="390" y1="582" x2="390" y2="604" stroke="#6b7280" stroke-width="2" marker-end="url(#arr4)"/>
+
+    <!-- N6 master -->
+    <rect x="200" y="608" width="380" height="68" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="632" font-size="14.5" font-weight="700" fill="#2f5d8a">④ 记 master</text>
+    <text x="215" y="654" font-size="13" fill="#1a1a1a">rankOfFirstMemcpy = ranksUnfiltered[0]（未过滤表首元素）</text>
+    <line x1="390" y1="676" x2="390" y2="698" stroke="#6b7280" stroke-width="2" marker-end="url(#arr4)"/>
+
+    <!-- N7 return pill -->
+    <rect x="150" y="702" width="520" height="52" rx="26" fill="#2e7d4f"/>
+    <text x="410" y="735" text-anchor="middle" fill="#ffffff" font-size="15" font-weight="600">return MemcpyDispatchInfo：活清单×3 + originalRanks（未过滤标注表）</text>
+  </svg>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <p><b class="k">分方向看 dispatchMemcpy 的输入（pair 0,2）——每个 rank 收到什么：</b></p>
+    <p style="margin:14px 0 6px"><b class="k">表 7 · Write（L66：<code>doMemcpy(srcNode, peerNode)</code>，偏好 = PREFER_SRC_CONTEXT）</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:900px">
+      <tr><th>输入项</th><th>rank0</th><th>rank1</th><th>rank2</th><th>rank3</th><th>一致性</th></tr>
+      <tr><td class="stage">实参 1 → srcNodesUnfiltered[0]<br><span style="font-size:12px;color:#5f6368">全量候选源清单（待标注）</span></td><td>本进程的 srcNode 实例</td><td>同左</td><td>同左</td><td>同左</td><td>同一对象各持一份（见 2.5）</td></tr>
+      <tr><td class="stage">　└ 其中 MPI_rank（owner 标签，标注执行者的依据）</td><td>0</td><td>0</td><td>0</td><td>0</td><td>完全相同</td></tr>
+      <tr><td class="stage">实参 2 → dstNodesUnfiltered[0]<br><span style="font-size:12px;color:#5f6368">全量候选目标清单（待标注）</span></td><td>本进程的 peerNode 实例</td><td>同左</td><td>同左</td><td>同左</td><td>同一对象各持一份</td></tr>
+      <tr><td class="stage">　└ 其中 MPI_rank（owner 标签，标注执行者的依据）</td><td>2</td><td>2</td><td>2</td><td>2</td><td>完全相同</td></tr>
+      <tr><td class="stage">ctxPreference<br><span style="font-size:12px;color:#5f6368">决定标 src 侧还是 dst 侧执行</span></td><td>PREFER_SRC_CONTEXT</td><td>同左</td><td>同左</td><td>同左</td><td>相同（L46：Write → SRC）</td></tr>
+      <tr><td class="stage">worldRank（认领比较用）<br><span style="font-size:12px;color:#5f6368">本进程编号，与标注值比对决定认领</span></td><td><b>0</b></td><td><b>1</b></td><td><b>2</b></td><td><b>3</b></td><td><b>★唯一不同——分活的全部依据</b></td></tr>
+      <tr><td class="stage">contextsUnfiltered（标注后）<br><span style="font-size:12px;color:#5f6368">执行者的 CUDA ctx——全员答案表</span></td><td>[本进程 ctx]</td><td>[本进程 ctx]</td><td>[本进程 ctx]</td><td>[本进程 ctx]</td><td>长度 1；4 值互不相同（CUcontext 是进程本地资源），人人有值但只有执行者那份会被消费</td></tr>
+      <tr><td class="stage">ranksUnfiltered（标注后）<br><span style="font-size:12px;color:#5f6368">每任务的执行者名单——分活依据</span></td><td>[0]</td><td>[0]</td><td>[0]</td><td>[0]</td><td>长度 1；执行者 = srcNode 的 MPI_rank = 0，全员同值</td></tr>
+      <tr><td class="stage">srcNodes（认领后）<br><span style="font-size:12px;color:#5f6368">认领到的 src 活清单（进返回值）</span></td><td>[&amp;srcNode]（1 项）</td><td>[]</td><td>[]</td><td>[]</td><td>标注值 == worldRank 才收活</td></tr>
+      <tr><td class="stage">dstNodes（认领后）<br><span style="font-size:12px;color:#5f6368">认领到的 dst 活清单（进返回值）</span></td><td>[&amp;peerNode]（1 项）</td><td>[]</td><td>[]</td><td>[]</td><td>与 srcNodes 同步收</td></tr>
+      <tr><td class="stage">contexts（认领后）<br><span style="font-size:12px;color:#5f6368">认领到的 ctx，拷贝前切换上下文用</span></td><td>[自己的 ctx]（1 项）</td><td>[]</td><td>[]</td><td>[]</td><td>后续 doMemcpyCore 里 cuCtxSetCurrent 消费</td></tr>
+      <tr><td class="stage">originalRanks（随返回值带出）<br><span style="font-size:12px;color:#5f6368">未过滤执行者表，结果 Bcast 对账用</span></td><td>[0]</td><td>[0]</td><td>[0]</td><td>[0]</td><td>未过滤标注表，calculateVectorBandwidth 逐任务 Bcast 对账用</td></tr>
+    </table>
+    </div>
+    <p style="margin:18px 0 6px"><b class="k">表 8 · Read（L64：<code>doMemcpy(peerNode, srcNode)</code>，偏好 = PREFER_DST_CONTEXT）</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:900px">
+      <tr><th>输入项</th><th>rank0</th><th>rank1</th><th>rank2</th><th>rank3</th><th>一致性</th></tr>
+      <tr><td class="stage">实参 1 → srcNodesUnfiltered[0]<br><span style="font-size:12px;color:#5f6368">全量候选源清单（待标注）</span></td><td>本进程的 peerNode 实例（对调后坐上"src"位）</td><td>同左</td><td>同左</td><td>同左</td><td>同一对象各持一份</td></tr>
+      <tr><td class="stage">　└ 其中 MPI_rank（owner 标签，标注执行者的依据）</td><td>2</td><td>2</td><td>2</td><td>2</td><td>完全相同</td></tr>
+      <tr><td class="stage">实参 2 → dstNodesUnfiltered[0]<br><span style="font-size:12px;color:#5f6368">全量候选目标清单（待标注）</span></td><td>本进程的 srcNode 实例（对调后坐上"dst"位）</td><td>同左</td><td>同左</td><td>同左</td><td>同一对象各持一份</td></tr>
+      <tr><td class="stage">　└ 其中 MPI_rank（owner 标签，标注执行者的依据）</td><td>0</td><td>0</td><td>0</td><td>0</td><td>完全相同</td></tr>
+      <tr><td class="stage">ctxPreference<br><span style="font-size:12px;color:#5f6368">决定标 src 侧还是 dst 侧执行</span></td><td>PREFER_DST_CONTEXT</td><td>同左</td><td>同左</td><td>同左</td><td>相同（L46：Read → DST）</td></tr>
+      <tr><td class="stage">worldRank（认领比较用）<br><span style="font-size:12px;color:#5f6368">本进程编号，与标注值比对决定认领</span></td><td><b>0</b></td><td><b>1</b></td><td><b>2</b></td><td><b>3</b></td><td><b>★唯一不同——分活的全部依据</b></td></tr>
+      <tr><td class="stage">contextsUnfiltered（标注后）<br><span style="font-size:12px;color:#5f6368">执行者的 CUDA ctx——全员答案表</span></td><td>[本进程 ctx]</td><td>[本进程 ctx]</td><td>[本进程 ctx]</td><td>[本进程 ctx]</td><td>长度 1；走 dst 分支（L396-398），dst 即对调后的 srcNode 实例</td></tr>
+      <tr><td class="stage">ranksUnfiltered（标注后）<br><span style="font-size:12px;color:#5f6368">每任务的执行者名单——分活依据</span></td><td>[0]</td><td>[0]</td><td>[0]</td><td>[0]</td><td>与 Write 相同——执行者仍是 pair.first 的 rank 0</td></tr>
+      <tr><td class="stage">srcNodes（认领后）<br><span style="font-size:12px;color:#5f6368">认领到的 src 活清单（进返回值）</span></td><td>[&amp;peerNode]（1 项）</td><td>[]</td><td>[]</td><td>[]</td><td>收的是实参 1（对调后的 peerNode）</td></tr>
+      <tr><td class="stage">dstNodes（认领后）<br><span style="font-size:12px;color:#5f6368">认领到的 dst 活清单（进返回值）</span></td><td>[&amp;srcNode]（1 项）</td><td>[]</td><td>[]</td><td>[]</td><td>收的是实参 2（对调后的 srcNode）</td></tr>
+      <tr><td class="stage">contexts（认领后）<br><span style="font-size:12px;color:#5f6368">认领到的 ctx，拷贝前切换上下文用</span></td><td>[自己的 ctx]（1 项）</td><td>[]</td><td>[]</td><td>[]</td><td>与 Write 无差别</td></tr>
+      <tr><td class="stage">originalRanks（随返回值带出）<br><span style="font-size:12px;color:#5f6368">未过滤执行者表，结果 Bcast 对账用</span></td><td>[0]</td><td>[0]</td><td>[0]</td><td>[0]</td><td>与 Write 相同</td></tr>
+    </table>
+    </div>
+    <ul style="margin-top:12px">
+      <li><b>四个 rank 的输入完全相同</b>（清单里对象的身份标签、偏好都一样），唯一的区别是各自的 worldRank——"零通信分活"正是靠这一点成立：相同输入 + 确定性代码，只有 worldRank 不同的 rank 会认领同一个任务。</li>
+      <li><b>对象"各持一份"但标签一致：</b>每个 rank 传入的是自己进程里的 srcNode/peerNode 实例（VA、handle 各不相同，见 2.5），dispatchMemcpy 只读它们的 getMPIRank()（标签）和 getPrimaryCtx()（本地 ctx）。</li>
+      <li><b>方向差异全部在 run() 调用处解决：</b>dispatchMemcpy 本身不区分 Read/Write，只机械地按偏好选 src 或 dst——Read 的对调（L64）+ 偏好翻转（L46）双重抵消后，两个方向的执行者都是 pair.first。</li>
+      <li><b>两类变量分工：</b>contextsUnfiltered / ranksUnfiltered 是"全员都算出的完整答案表"（不过滤，长度 = 任务数）；srcNodes / dstNodes / contexts 是"认领后的个人活清单"（长度 = 自己认领到的任务数）——长度即身份。</li>
+      <li><b>master 与对账：</b>ranksUnfiltered[0] = 0 全员同值 → rankOfFirstMemcpy = 0（闸门释放者、结果 Bcast root）；originalRanks 随返回值带出，供 calculateVectorBandwidth 逐任务 Bcast 对账。</li>
+    </ul>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <p><b class="k">补充：发起方与数据方向是两件独立的事（pair 0,2）</b>——"发起"的主体是执行 GPU（占用 SM/CE 资源，由 ctxPreference 经认领的 ctx 决定）；数据方向永远由拷贝语义决定：<b>读函数视角的 src、写函数视角的 dst</b>。</p>
+    <p style="margin:14px 0 6px"><b class="k">表 9 · 发起方与数据方向逐维度对照</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:900px">
+      <tr><th>维度</th><th>Write（pair 0,2）</th><th>Read（pair 0,2）</th></tr>
+      <tr><td class="stage">run() 调用</td><td>doMemcpy(srcNode, peerNode)</td><td>doMemcpy(peerNode, srcNode)（L64 实参对调）</td></tr>
+      <tr><td class="stage">rank0 认领后</td><td>srcNodes=[srcNode]，dstNodes=[peerNode]</td><td>srcNodes=[peerNode]，dstNodes=[srcNode]</td></tr>
+      <tr><td class="stage">执行 GPU</td><td>src 的 ctx → rank0 的卡（节点 A 卡 0）</td><td>dst 的 ctx → rank0 的卡（节点 A 卡 0，同一块卡）</td></tr>
+      <tr><td class="stage">拷贝动作</td><td>读 srcNode（本地）→ 写 peerNode（跨节点）</td><td>读 peerNode（跨节点）→ 写 srcNode（本地）</td></tr>
+      <tr><td class="stage">物理数据流</td><td>srcNode → peerNode</td><td>peerNode → srcNode</td></tr>
+      <tr><td class="stage">NVLink 流量类型</td><td><b>write</b>（数据流出节点 A）</td><td><b>read</b>（数据流入节点 A）</td></tr>
+    </table>
+    </div>
+    <p style="margin-top:12px"><b>对于 READ</b>，rank0 最后拿到的 srcNodes 是 peerNode 的信息，dstNodes 是 srcNode 的信息，ctxPreference 是 PREFER_DST_CONTEXT，所以是 dstNodes 发起，即 srcNode 里面的 rank 发起，即 rank0 发起——它发起读请求，数据从 srcNodes 搬到 dstNodes，即从 peerNode 到 srcNode 搬移数据。</p>
+    <p style="margin-top:12px"><b>对于 WRITE</b>，rank0 最后拿到的 srcNodes 是 srcNode 的信息，dstNodes 是 peerNode 的信息，ctxPreference 是 PREFER_SRC_CONTEXT，所以是 srcNodes 发起，即 srcNode 里面的 rank 发起，即 rank0 发起——它发起写请求，数据从 srcNodes 搬到 dstNodes，即从 srcNode 到 peerNode 搬移数据。</p>
+  </div>
+
+  <h3 id="sec-nodehelper" style="font-size:19px; margin:34px 0 12px; color:var(--a);">2.8 NodeHelper：单节点与多节点的分岔点</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p><b class="k">定位（memcpy.h L116-139）：</b>NodeHelper 是"执行期跨进程协同"的<b>策略接口</b>——11 个纯虚函数分四组：<b>派发</b>（dispatchMemcpy）、<b>结果归集</b>（calculateTotal/Sum/First/VectorBandwidth）、<b>同步</b>（synchronizeProcess / barrierAllRanks / streamSynchronizeWrapper）、<b>闸门</b>（streamBlocker 三件套）。另有静态函数 selectExecutingBuffer（非虚函数，供单节点实现复用）。doMemcpyCore 是单/多节点共用的模板代码，不能直接写 MPI——同一个函数要同时服务单进程（无 MPI 环境，直接调 MPI 会崩）和多进程（需要协同），差异全部下沉到这个接口。</p>
+    <ul>
+      <li><b>选择点在用例侧：</b>单节点用例构造 MemcpyOperation 时固定 new NodeHelperSingle()（memcpy.cpp L340）；多节点用例传入 NodeHelperMulti（multinode_testcases.cpp）。两者在编译期由 MULTINODE 宏隔离。</li>
+      <li><b>不是"统一封装 MPI"：</b>单节点实现里一个 MPI 调用都没有；多节点实现里 MPI 只是协同手段之一——闸门不走网络（单节点走 host 锁页内存，多节点走共享 device 闩针），分配期的 MPI（fabric 句柄 Bcast）住在 buffer 构造函数里，也不在 NodeHelper。</li>
+    </ul>
+  </div>
+  <div class="card" style="margin-bottom:14px">
+    <p style="margin:0 0 6px"><b class="k">表 10 · 同一接口，两套实现</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:960px">
+      <tr><th>接口函数</th><th>NodeHelperSingle（单节点）</th><th>NodeHelperMulti（多节点）</th></tr>
+      <tr><td class="stage">dispatchMemcpy<br><span style="font-size:12px;color:#5f6368">选执行者</span></td><td>selectExecutingBuffer 选出执行 buffer，<b>不过滤清单</b>——src/dstBuffers 原样带出，任务不丢</td><td>标注-认领，<b>过滤出活清单</b>——执行者满清单、空闲者空清单，长度即身份</td></tr>
+      <tr><td class="stage">calculateTotalBandwidth<br><span style="font-size:12px;color:#5f6368">总带宽</span></td><td>本地公式：(totalSize × loopCount × 10⁶) / totalTime</td><td>先 2 次 Allreduce（time 取 MAX、size 取 SUM）再套同一公式</td></tr>
+      <tr><td class="stage">calculateSumBandwidth<br><span style="font-size:12px;color:#5f6368">带宽求和</span></td><td>本地 stats 直接求和</td><td>本地求和后再 Allreduce(SUM) 跨节点累加</td></tr>
+      <tr><td class="stage">calculateFirstBandwidth<br><span style="font-size:12px;color:#5f6368">首个任务带宽</span></td><td>直接取本地 stats[0]</td><td>master（= rankOfFirstMemcpy）取自己的 stats[0] 后 Bcast 给全员</td></tr>
+      <tr><td class="stage">calculateVectorBandwidth<br><span style="font-size:12px;color:#5f6368">逐任务带宽</span></td><td>原样返回 results（直通）</td><td>按 originalRanks 逐任务 Bcast，把每个任务的结果发还标注执行者</td></tr>
+      <tr><td class="stage">synchronizeProcess<br><span style="font-size:12px;color:#5f6368">进程同步</span></td><td>No-op</td><td>MPI_Barrier</td></tr>
+      <tr><td class="stage">barrierAllRanks<br><span style="font-size:12px;color:#5f6368">全员屏障</span></td><td>No-op</td><td>MPI_Barrier</td></tr>
+      <tr><td class="stage">streamSynchronizeWrapper<br><span style="font-size:12px;color:#5f6368">等流</span></td><td>cuStreamSynchronize（阻塞等待）</td><td>cuStreamQuery 循环 + MPI_Iprobe 心跳——避免阻塞卡死 MPI 消息泵（NCCL/MPI progress 要求，memcpy.h L124-126 注释）</td></tr>
+      <tr><td class="stage">streamBlocker 三件套<br><span style="font-size:12px;color:#5f6368">闸门</span></td><td>host 锁页变量 blockingVarHost（cuMemHostAlloc）+ spinKernel，单进程内对齐起跑</td><td>host 闩针（每进程一张）+ <b>4 字节 fabric 共享 device 闩针</b>：master 的 GPU 在 host 闩针上通过后写 device 闩针，释放其余在闸门后等待的 GPU——跨节点对齐起跑（L478-490）</td></tr>
+    </table>
+    </div>
+    <ul style="margin-top:12px">
+      <li><b>单节点 = 直通实现：</b>同步类函数全是 No-op，结果归集全是本地计算——接口在单节点下退化成"直接执行"，唯一保留的机制是闸门（起跑对齐对单节点 bidir 测试同样有意义）。</li>
+      <li><b>多节点 = 同函数 MPI 化：</b>归集类函数变成 Allreduce/Bcast；等流从阻塞式换成查询+心跳式。MPI 出现的位置全部在"必须全员对齐/互换数据"的点。</li>
+      <li><b>闸门是两套实现都保留的机制：</b>区别只在闩针的物理位置——单节点一张 host 锁页变量够用；多节点必须让跨进程的 GPU 看到同一个值，所以用 fabric 共享的 device 内存。</li>
+    </ul>
+  </div>
+
+  <h3 id="sec-domemcpycore" style="font-size:19px; margin:34px 0 12px; color:var(--a);">2.9 doMemcpyCore：把"认领到的活"跑成带宽数字</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p><b class="k">函数职责（memcpy.cpp L468-646）：</b>接收 dispatch 后的 MemcpyDispatchInfo，执行 <b>averageLoopCount 轮采样</b>（默认 3），每轮内入队并测量 <b>loopCount 次拷贝</b>（默认 16），用 CUDA event 计时，产出每个任务的带宽统计。</p>
+    <ul>
+      <li><b>5 个 per-task 向量</b>（L469-473）：streams / startEvents / endEvents / bandwidthStats / adjustedCopySizes，按任务数开槽——空闲 rank 长度 0，vector(0) 不分配，一切 per-task 循环自动 0 次。</li>
+      <li><b>totalEnd 全员都建</b>（L504-505）：空清单 rank 也创建这个 event，为了让代码不用按身份分支。</li>
+      <li><b>双重起跑对齐：</b>spin 闸门 kernel 消除 host 入队抖动（GPU 到闸门即停）；cuStreamWaitEvent(startEvents[0]) 链消除任务间相对偏移——所有拷贝从同一时刻起跑。</li>
+      <li><b>模板代码零直接 MPI：</b>多节点协同全部通过 nodeHelper——②a/②g 的 Barrier、闸门共享闩针、等流心跳、④ 的结果归集。</li>
+      <li><b>空闲 rank = 义务照常：</b>per-task 循环全跳过，但闸门复位/释放、Barrier、totalEnd 创建销毁一步不少（等流循环 0 次——没有自己的流），与执行者保持同节奏。</li>
+    </ul>
+  </div>
+  <div class="card">
+  <p style="margin:0 0 6px"><b class="k">图 5 · doMemcpyCore 执行流程</b></p>
+  <svg viewBox="0 0 1160 1240" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+      </marker>
+      <marker id="arr5g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e7d4f"/>
+      </marker>
+    </defs>
+
+    <rect x="150" y="20" width="520" height="52" rx="26" fill="#2f5d8a"/>
+    <text x="410" y="53" text-anchor="middle" fill="#ffffff" font-size="15.5" font-weight="600">开始：doMemcpyCore(info)——活清单（执行者满 / 空闲者空）</text>
+    <line x1="410" y1="72" x2="410" y2="94" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="98" width="520" height="90" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="120" font-size="14.5" font-weight="700" fill="#2f5d8a">① 资源准备（按任务数循环）</text>
+    <text x="215" y="142" font-size="13" fill="#1a1a1a">每任务：切 ctx → 建 1 条非阻塞 stream（独立拷贝通道）</text>
+    <text x="215" y="162" font-size="13" fill="#1a1a1a">建 start/end 两个 event（GPU 时间戳测起止）+ 探测实际拷贝大小</text>
+    <text x="215" y="182" font-size="13" fill="#1a1a1a">全员建 totalEnd：记录"全部拷贝完成"时刻的 event（TOTAL_BW 用）</text>
+    <line x1="410" y1="188" x2="410" y2="210" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="214" width="520" height="40" rx="20" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="410" y="240" text-anchor="middle" font-size="14.5" font-weight="600" fill="#2f5d8a">② 采样循环 n = 0 … averageLoopCount-1（默认 3）</text>
+    <line x1="410" y1="254" x2="410" y2="276" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="280" width="520" height="56" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="302" font-size="14" font-weight="700" fill="#2f5d8a">②a 闸门复位 + 进程同步</text>
+    <text x="215" y="324" font-size="13" fill="#1a1a1a">闩针清 0（GPU 到闸门会停）→ Barrier：全员在闸门关闭状态下开轮</text>
+    <line x1="410" y1="336" x2="410" y2="358" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="362" width="520" height="48" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="384" font-size="14" font-weight="700" fill="#2f5d8a">②b 校验数据准备</text>
+    <text x="215" y="404" font-size="13" fill="#1a1a1a">给源 buffer 填随机 pattern——拷贝后比对的"标准答案"</text>
+    <line x1="410" y1="410" x2="410" y2="432" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="436" width="520" height="64" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="458" font-size="14" font-weight="700" fill="#2f5d8a">②c 入队闸门 + 预热</text>
+    <text x="215" y="480" font-size="13" fill="#1a1a1a">入队 spin kernel：GPU 执行到此原地空转，闸门不开不往下走</text>
+    <text x="215" y="500" font-size="13" fill="#1a1a1a">入队预热拷贝 ×WARMUP_COUNT：热身缓存/页表，不计入测量</text>
+    <line x1="410" y1="500" x2="410" y2="522" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="526" width="520" height="64" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="548" font-size="14" font-weight="700" fill="#2f5d8a">②d 起跑时刻锚定</text>
+    <text x="215" y="570" font-size="13" fill="#1a1a1a">startEvents[0] 记在 stream0，其余流 cuStreamWaitEvent 等它</text>
+    <text x="215" y="590" font-size="13" fill="#1a1a1a">——所有任务起跑时刻锚定到同一点，测出的带宽才可比</text>
+    <line x1="410" y1="590" x2="410" y2="612" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="616" width="520" height="64" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="638" font-size="14" font-weight="700" fill="#2f5d8a">②e 正式拷贝入队</text>
+    <text x="215" y="660" font-size="13" fill="#1a1a1a">入队正式拷贝 ×loopCount（真正计时的部分）+ endEvent</text>
+    <text x="215" y="680" font-size="13" fill="#1a1a1a">TOTAL_BW：让 stream0 等所有任务结束，才能测总完成时间</text>
+    <line x1="410" y1="680" x2="410" y2="702" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="706" width="520" height="56" rx="10" fill="#fff8e1" stroke="#d9b64a" stroke-width="1.5"/>
+    <text x="215" y="728" font-size="14" font-weight="700" fill="#8a5a12">②f 释放闸门 ★</text>
+    <text x="215" y="750" font-size="13" fill="#1a1a1a">totalEnd 记到 stream0 → host 写闩针 1：GPU 过闸开跑（多卡时经共享闩针对齐）</text>
+    <line x1="410" y1="762" x2="410" y2="784" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="788" width="520" height="64" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="810" font-size="14" font-weight="700" fill="#2f5d8a">②g 等流 + 屏障</text>
+    <text x="215" y="832" font-size="13" fill="#1a1a1a">等所有拷贝真正跑完（单=阻塞等 / 多=查询+心跳，喂 MPI 消息泵）</text>
+    <text x="215" y="852" font-size="13" fill="#1a1a1a">→ Barrier：全员测量都结束才进入校验</text>
+    <line x1="410" y1="852" x2="410" y2="874" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="878" width="520" height="48" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="900" font-size="14" font-weight="700" fill="#2f5d8a">②h 校验</text>
+    <text x="215" y="920" font-size="13" fill="#1a1a1a">比对 dst 内容与最初 pattern，确认搬运正确（本地 VA 直接读）</text>
+    <line x1="410" y1="926" x2="410" y2="948" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="200" y="952" width="520" height="84" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="974" font-size="14" font-weight="700" fill="#2f5d8a">②i 算带宽</text>
+    <text x="215" y="996" font-size="13" fill="#1a1a1a">用 GPU 时间戳算每任务耗时 → 带宽 = 拷贝量 × 次数 ÷ 耗时</text>
+    <text x="215" y="1016" font-size="13" fill="#1a1a1a">SUM_BW：每轮求和累积；TOTAL_BW：start0 → totalEnd 测总时长</text>
+    <text x="215" y="1036" font-size="13" fill="#1a1a1a">→ calculateTotalBandwidth（多节点内含 Allreduce 聚合）</text>
+
+    <line x1="720" y1="994" x2="860" y2="994" stroke="#2e7d4f" stroke-width="2"/>
+    <line x1="860" y1="994" x2="860" y2="308" stroke="#2e7d4f" stroke-width="2"/>
+    <line x1="860" y1="308" x2="724" y2="308" stroke="#2e7d4f" stroke-width="2" marker-end="url(#arr5g)"/>
+    <text x="872" y="640" font-size="12.5" fill="#2e7d4f">还有下一轮</text>
+    <text x="872" y="658" font-size="12.5" fill="#2e7d4f">采样？</text>
+
+    <line x1="410" y1="1036" x2="410" y2="1058" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+    <rect x="200" y="1062" width="520" height="56" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="1084" font-size="14" font-weight="700" fill="#2f5d8a">③ 清理</text>
+    <text x="215" y="1106" font-size="13" fill="#1a1a1a">销毁测量用 GPU 资源：totalEnd + 每任务 stream / 两个 event</text>
+    <line x1="410" y1="1118" x2="410" y2="1140" stroke="#6b7280" stroke-width="2" marker-end="url(#arr5)"/>
+
+    <rect x="150" y="1144" width="520" height="64" rx="26" fill="#2e7d4f"/>
+    <text x="410" y="1168" text-anchor="middle" fill="#ffffff" font-size="15" font-weight="600">④ 结果分派 → return</text>
+    <text x="410" y="1190" text-anchor="middle" fill="#ffffff" font-size="12.5">SUM=calculateSumBandwidth / TOTAL=totalBandwidth / VECTOR=逐任务 / FIRST=calculateFirstBandwidth（多节点内含 Bcast/Allreduce）</text>
+  </svg>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <p style="margin:0 0 6px"><b class="k">表 11 · doMemcpyCore 局部变量一览：作用与逐 rank 差异</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:1080px">
+      <tr><th>变量</th><th>作用</th><th>rank0（执行者，1 任务）</th><th>rank1 / 2 / 3（空闲，0 任务）</th></tr>
+      <tr><td class="stage">streams</td><td>每任务一条非阻塞流（独立拷贝通道），建好后塞进 info.streams 供入队 / 计时 / 等流全程使用</td><td><b>1 条</b>：闸门、预热、16 次拷贝、endEvent 全入队到它</td><td><b>0 条</b>：等流循环 0 次，直接跳到 Barrier</td></tr>
+      <tr><td class="stage">startEvents</td><td>每任务计时起点 event，排在闸门之后——打点不含 host 入队抖动</td><td><b>1 个</b>：所有任务的起跑锚点（其余流被设为等待它）</td><td><b>0 个</b></td></tr>
+      <tr><td class="stage">endEvents</td><td>每任务计时终点 event，排在 loopCount 次拷贝之后</td><td><b>1 个</b></td><td><b>0 个</b></td></tr>
+      <tr><td class="stage">bandwidthStats</td><td>每任务<b>统计器</b>（非单值）：3 轮采样各累积 1 个带宽数据点，FIRST / SUM / VECTOR 三个指标的数据源 + CV 来源</td><td><b>1 个</b>，装着 3 个数据点</td><td><b>0 个</b> → 归集循环 0 次，本地返回值被 master 的 Bcast 覆盖</td></tr>
+      <tr><td class="stage">adjustedCopySizes</td><td>每任务<b>最终</b>拷贝字节数：初值来自探测，正式拷贝后用实际截断值再更新（SM 内核会截断）；带宽公式用它</td><td><b>1 项</b>：探测值 → 实测值</td><td><b>0 项</b></td></tr>
+      <tr><td class="stage">finalCopySize</td><td><b>临时中转</b>：资源准备阶段存探测到的拷贝大小（CE / SM 截断规则不同，需实际探测），写进 info.adjustedCopySizes 后不再使用</td><td><b>1 项</b></td><td><b>0 项</b></td></tr>
+      <tr><td class="stage">totalEnd</td><td>记录"所有拷贝全部完成"时刻的 event，记在 stream0 末尾，仅 TOTAL_BW 指标消费</td><td>创建 + 每轮记录 + 消费</td><td>创建 / 销毁照做，<b>从不记录事件</b>（有 size&gt;0 保护）——纯占位，让代码不按身份分支</td></tr>
+      <tr><td class="stage">totalBandwidth</td><td>TOTAL_BW 指标专用统计器：每轮用 (startEvents[0] → totalEnd) 算出的总带宽累积进来</td><td>声明；仅 TOTAL_BW 口径写入</td><td>声明，永不写入，无人消费</td></tr>
+      <tr><td class="stage">sumBandwidthStat</td><td>SUM_BW 的<b>每轮总和</b>统计器：每轮存一个"所有任务带宽之和"，只贡献<b>轮间波动 CV</b>；SUM_BW 最终值另由 bandwidthStats 汇总（多节点还要 Allreduce）</td><td>每轮存入各任务带宽之和</td><td><b>每轮照样存入 0.0</b>（它在该函数的 for 循环外）——0 值序列无人消费，最终被 Bcast 覆盖</td></tr>
+    </table>
+    </div>
+    <ul style="margin:10px 0 0; padding-left:20px; font-size:13.5px; color:#444">
+      <li><b>分水岭是 info.srcBuffers.size()（1 vs 0）：</b>所有 per-task 向量槽位、所有 per-task 循环、totalEnd 的记录保护全由它决定。</li>
+      <li><b>两个例外：</b>totalEnd 全员创建销毁（只有执行者记录）；sumBandwidthStat 在循环外，人人每轮都写（空闲者写 0）。</li>
+      <li><b>空闲 rank 的 MPI 义务只剩：</b>两次 Barrier + 闸门复位/释放 + 收尾 Bcast。</li>
+    </ul>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <p style="margin:0 0 6px"><b class="k">表 12 · 每轮采样的逐 rank 时序（pair 0,2，与图 1 的步骤编号对应）</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:960px">
+      <tr><th>时序</th><th>流程图</th><th>rank0（执行者）</th><th>rank1 / 2 / 3（空闲者）</th></tr>
+      <tr><td class="stage">T1</td><td>①</td><td>建测量基础设施：1 条非阻塞 stream（独立拷贝通道，多任务并行互不阻塞）、start/end 两个 event（GPU 时间戳，测一段流的起止）、探测实际拷贝大小（SM 内核会截断）、totalEnd（一个 event，记录"所有拷贝全部完成"的时刻，仅 TOTAL_BW 指标使用）</td><td>仅建 totalEnd——没有任务，但资源动作与执行者保持对称</td></tr>
+      <tr><td class="stage">T2</td><td>②a</td><td>闸门闩针清 0（GPU 走到闸门会停住等待）+ Barrier：确保全员都在"闸门关闭"状态下进入本轮 <b style="color:#5b3fa8">【MPI：synchronizeProcess → MPI_Barrier】</b></td><td>各自清零自己的 host 闩针 + 对同一块 fabric 共享 device 闩针做 memset 清 0（幂等） <b style="color:#5b3fa8">【MPI：Barrier】</b></td></tr>
+      <tr><td class="stage">T3</td><td>②b</td><td>给源 buffer（512MB）填随机 pattern——拷贝完成后比对的"标准答案"</td><td>无任务，跳过</td></tr>
+      <tr><td class="stage">T4</td><td>②c</td><td>入队 spin kernel（GPU 执行到此原地空转，闸门不开不往下走）+ 预热拷贝 ×WARMUP_COUNT（热身缓存/页表，不计入测量）</td><td>跳过</td></tr>
+      <tr><td class="stage">T5</td><td>②d</td><td>记 startEvents[0]：其余流都被设置为等待它——所有任务的起跑时刻锚定到同一点</td><td>跳过</td></tr>
+      <tr><td class="stage">T6</td><td>②e</td><td>入队 16 次正式拷贝 + endEvent（只是排队，闸门未开不会执行）</td><td>跳过</td></tr>
+      <tr><td class="stage">T7</td><td>②f</td><td>记 totalEnd（记录"全部拷贝完成"时刻的 event，仅 TOTAL_BW 指标消费）→ 调 streamBlockerRelease：host 写自己的 host 闩针 = 1。rank0（master）的 GPU 在自己 host 闩针上旋等、通过，随后把<b>共享 device 闩针写 1</b> → 闸门打开，开始真正执行 T6 排队的 16 次拷贝：读 srcNode、写 peerNode，各 512MB，数据跨 NVLink——测量区间由此开始（本步<b>无 MPI</b>：闩针走 host 锁页内存 + 共享显存，不走网络）</td><td>各自写自己的 host 闩针 = 1（每进程的 host 闩针相互独立，只有 master 那张会被读）——它们没有排队任务，无需在闸门后等待</td></tr>
+      <tr><td class="stage">T8</td><td>②g</td><td>等自己的流把 16 次拷贝全部执行完 <b style="color:#5b3fa8">【MPI：等流循环内持续 MPI_Iprobe 心跳】</b></td><td>无流可等——等流循环 0 次直接跳过，进入下一步 Barrier 排队等待</td></tr>
+      <tr><td class="stage">T9</td><td>②g</td><td>Barrier：确认拷贝阶段全员结束 <b style="color:#5b3fa8">【MPI：MPI_Barrier】</b></td><td>Barrier <b style="color:#5b3fa8">【MPI：MPI_Barrier】</b></td></tr>
+      <tr><td class="stage">T10</td><td>②h</td><td>在本进程 VA 上比对 dst 与 pattern（跨节点映射的内存本地可直接读，无需任何通信）</td><td>空清单，0 次</td></tr>
+      <tr><td class="stage">T11</td><td>②i</td><td>endEvent − startEvent 的 GPU 时间差 → 带宽 = 实际拷贝量 × 16 ÷ 耗时</td><td>空循环，0 次</td></tr>
+      <tr><td class="stage">T12</td><td>②a-②i</td><td>n = 1, 2：重复 T2–T11</td><td>重复 T2–T11（义务部分）</td></tr>
+      <tr><td class="stage">T13</td><td>③</td><td>销毁 stream + 2 个 event</td><td>销毁 totalEnd</td></tr>
+      <tr><td class="stage">T14</td><td>④</td><td>FIRST_BW：master = rank0 把 stats[0] Bcast 给全员 <b style="color:#5b3fa8">【MPI：calculateFirstBandwidth → MPI_Bcast（root = rankOfFirstMemcpy）】</b></td><td>Bcast 接收带宽值，写进返回值 <b style="color:#5b3fa8">【MPI：MPI_Bcast】</b></td></tr>
+    </table>
+    </div>
+    <div class="note" style="margin-top:12px">
+      <b>MPI 账目（每轮采样）：</b>2 Barrier（②a / ②g）+ 等流期间的 MPI_Iprobe 心跳（仅执行者——空闲者无流可等，直接进 Barrier）；整个函数收尾 1 次结果归集（FIRST_BW = Bcast，SUM/TOTAL_BW = Allreduce，VECTOR_BW = 逐任务 Bcast）。空闲 rank 的循环体虽短，Barrier 点一个不缺——这就是"空清单也能与执行者同节奏"的结构保证。
+    </div>
+  </div>
+
+  <h2 id="sec-bidir" style="margin-top:44px">三、MultinodeDeviceToDeviceBidirTransfer 精读（1 对 1 双向）</h2>
+  <h3 id="sec-bidir-summary" style="font-size:19px; margin:26px 0 12px; color:var(--a);">3.1 函数功能总结</h3>
+  <div class="card">
+    <p><b class="k">一句话职责：</b>对每一对 GPU，<b>一次调用内</b>同时开出两个方向相反的拷贝任务（本端→对端 与 对端→本端 并发对开），各自独立计时、独立校验，产出 Write1 / Write2 / Total 三张 worldSize × worldSize 矩阵。</p>
+    <ul>
+      <li><b>与第二章的关系：</b>引擎层完全复用（pair 生成 → Unicast 构造 → dispatchMemcpy 认领 → doMemcpyCore 采样循环，见 2.4 / 2.5 / 2.7 / 2.9），差异全在用例层：buffer 2 块 → 4 块、任务 1 个 → 2 个交叉任务、出口 FIRST_BW → VECTOR_BW。</li>
+      <li><b>谁在跑：</b>4 个 rank 仍跑完全相同的代码；区别是每对出现<b>两个执行者</b>——两端各认领 1 个任务（Write：task0 归 pair.second、task1 归 pair.first），不再是"一人干活三人围观"。</li>
+      <li><b>内存从哪来：</b>每对 4 块 Unicast（每端 2 块）。两个方向并发读写，若共用 buffer 会互踩（A 方向的目的地恰是 B 方向的源），必须内存隔离——代价是每端显存占用翻倍（2 × size）。</li>
+      <li><b>双向怎么对齐：</b>两端的流各排一个 spin 闸门，由<b>同一块共享 device 闩针</b>（4 字节，物理驻留 rank0 的 GPU、全员映射）一次放行——两级闩针链在双向场景才走满两跳（单向 1 对 1 只有 master 一跳，第二跳无人等待）。</li>
+      <li><b>结果怎么归：</b>VECTOR_BW 出口逐任务返回 → calculateVectorBandwidth 按任务表逐个 Bcast → results[0] = task0（对端→本端），results[1] = task1（本端→对端），Total = 两者之和（纯加法，不是 TOTAL_BW 的"总时间"口径）。</li>
+      <li><b>镜像复用：</b>pair 循环改走 cachedPairLoop——src &gt; dst 且镜像格 (dst, src) 已有值时三张矩阵直接照抄，不建 buffer、不测量、零 MPI。</li>
+      <li><b>每对 MPI 账目（物理测量时）：</b>6 Bcast（4 块 buffer 构造 + 2 次结果归集）+ 14 Barrier（构造 4 + 采样 3 × 2 + 析构 4）；镜像命中的 pair 为零。</li>
+      <li><b>用例自述与代码的一处出入：</b>generateDesc 的 CE 变体写"反向拷贝同时运行但不计量"；现行代码两个方向都在 VECTOR_BW 出口独立计量并分别上报（Write1 / Write2 / Total），以代码为准。</li>
+    </ul>
+  </div>
+
+  <h3 id="sec-bidir-diff" style="font-size:19px; margin:34px 0 12px; color:var(--a);">3.2 与单向用例的逐维度差异</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p style="margin:0 0 6px"><b class="k">表 13 · 同一引擎，两种用法：1 对 1 单向 vs 1 对 1 双向</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:1080px">
+      <tr><th>维度</th><th>单向（第二章）</th><th>双向（本章）</th><th>说明 / 影响</th></tr>
+      <tr><td class="stage">每对 buffer 数</td><td>2 块（srcNode / peerNode 各 1）</td><td>4 块（src1 / src2 + peer1 / peer2，每端 2 块）</td><td>方向 A 的源 = 方向 B 的目的地，并发对开必须内存隔离；每端显存翻倍</td></tr>
+      <tr><td class="stage">任务清单</td><td>1 个：srcNode → peerNode（Write）</td><td>2 个交叉任务：task0 = peer1 → src1（对端→本端）、task1 = src2 → peer2（本端→对端）</td><td>srcNodes = {peer1, src2}、peerNodes = {src1, peer2}——源表与目的表各自交叉排列</td></tr>
+      <tr><td class="stage">执行者</td><td>1 个（Write = pair.first 的 rank）</td><td>2 个，两端各 1（Write：task0 归 pair.second、task1 归 pair.first；Read 对调）</td><td>双向并发体现在<b>跨 rank</b>，不是单 rank 多流</td></tr>
+      <tr><td class="stage">每 rank 流数</td><td>执行者 1 条</td><td>两个执行者仍各 1 条</td><td>2 个任务分属 2 个 rank——WaitEvent 锚点链（i ≥ 1）依旧休眠</td></tr>
+      <tr><td class="stage">master（rankOfFirstMemcpy）</td><td>task0 的执行 rank = pair.first</td><td>Write = pair.second 的 rank；Read = pair.first 的 rank</td><td>闩针链第一跳换端：双向 Write 时"发令员"是对端</td></tr>
+      <tr><td class="stage">引擎入口与口径</td><td>doMemcpy · FIRST_BW</td><td>doMemcpyVector · VECTOR_BW</td><td>同一个 doMemcpyCore；VECTOR_BW 逐任务独立统计（各自 3 轮采样、各自 CV）</td></tr>
+      <tr><td class="stage">结果归集</td><td>calculateFirstBandwidth：1 次 Bcast</td><td>calculateVectorBandwidth：按 originalRanks 逐任务 Bcast × 2</td><td>全员拼出有序向量 {BW(task0), BW(task1)}</td></tr>
+      <tr><td class="stage">输出矩阵</td><td>1 张 value(first, second)</td><td>3 张：Write1 / Write2 / Total</td><td>Write1 格装对端→本端分量（列→行），Write2 装本端→对端（行→列，与单向 Write 同向），Total = 相加</td></tr>
+      <tr><td class="stage">pair 循环</td><td>plain for：12 个有序对全部物理测量</td><td>cachedPairLoop：src &gt; dst 且镜像格有值 → 照抄不重跑</td><td>物理测量 6–12 次，取决于固定种子洗牌后两定向对的先后（见下方说明）</td></tr>
+      <tr><td class="stage">闩针开闸链</td><td>一跳（master 自过 host 闩针后写 device 闩针，第二跳无人等）</td><td>两跳满载：master 写共享 device 闩针 → 对端闸门被放行</td><td>双向才是两级闩针设计的目标场景</td></tr>
+    </table>
+    </div>
+    <ul style="margin:10px 0 0; padding-left:20px; font-size:13.5px; color:#444">
+      <li><b>镜像只认一个方向：</b>仅 src &gt; dst 的格子查镜像（把先测方向的值抄进后到方向）；src &lt; dst 的格子永远物理测量。</li>
+      <li><b>顺序决定次数：</b>若洗牌后 (2,0) 先于 (0,2) 到来，(2,0) 落地时镜像格尚空 → 物理测量；随后的 (0,2) 不查镜像 → 也物理测量（该链路测 2 次）。反之 (0,2) 先测、(2,0) 照抄（测 1 次）。12 个有序对合计物理测量 6–12 次，顺序由固定种子 0xBAADF00D 洗牌决定、可复现。</li>
+      <li><b>照抄的是数值本身：</b>镜像格的 Write1 / Write2 与先测格对应同一次物理测量的两个方向分量，Total 恒为两分量之和。</li>
+    </ul>
+  </div>
+
+  <h3 id="sec-bidir-buffers" style="font-size:19px; margin:34px 0 12px; color:var(--a);">3.3 四块 buffer 与两个交叉任务</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p style="margin:0 0 6px"><b class="k">表 14 · 每对构造的 4 块 Unicast buffer（pair (0, 2)，size = 512MB）</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:880px">
+      <tr><th>buffer</th><th>物理位置</th><th>owner（创建者）</th><th>task0（2→0）中</th><th>task1（0→2）中</th></tr>
+      <tr><td class="stage">src1</td><td>节点 A · GPU0</td><td>rank0</td><td>目的地（被写入）</td><td>不参与</td></tr>
+      <tr><td class="stage">src2</td><td>节点 A · GPU0</td><td>rank0</td><td>不参与</td><td>源（被读出）</td></tr>
+      <tr><td class="stage">peer1</td><td>节点 B · GPU2</td><td>rank2</td><td>源（被读出）</td><td>不参与</td></tr>
+      <tr><td class="stage">peer2</td><td>节点 B · GPU2</td><td>rank2</td><td>不参与</td><td>目的地（被写入）</td></tr>
+    </table>
+    </div>
+    <p style="margin:10px 0 0; font-size:13.5px; color:#444">每块 buffer 的构造 / 映射 / 析构流程与 2.5 完全相同（owner cuMemCreate → Bcast fabric 句柄 → 全员 import / map / setAccess，收尾 Barrier）。memset 阶段 4 块各被填一次、不重不漏：每个执行者给自己任务的源填 BAADF00D、给目的地填 CAFEBABE（各一本地块 + 一跨节点块）。</p>
+    <p style="margin:18px 0 6px"><b class="k">表 15 · 两个交叉任务的认领与结果去向（pair (0, 2)）</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:920px">
+      <tr><th>任务</th><th>数据流</th><th>Write 执行者（PREFER_SRC · 认领源）</th><th>Read 执行者（PREFER_DST · 认领目的地）</th><th>结果去向</th></tr>
+      <tr><td class="stage">task0：peer1 → src1</td><td>对端→本端（2→0）</td><td>rank2</td><td>rank0</td><td>results[0] → Write1 / Read1 矩阵</td></tr>
+      <tr><td class="stage">task1：src2 → peer2</td><td>本端→对端（0→2）</td><td>rank0</td><td>rank2</td><td>results[1] → Write2 / Read2 矩阵</td></tr>
+    </table>
+    </div>
+    <p style="margin:10px 0 0; font-size:13.5px; color:#444">master = ranksUnfiltered[0] = task0 的执行者（Write = rank2，Read = rank0）。Total 矩阵 = 两个独立计时值直接相加。</p>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <p><b class="k">dispatchMemcpy 怎么把 2 个任务分给 2 个执行 rank（pair (0, 2)，Write）：</b>机制与 2.7 的表 7 完全相同（标注 → 认领 → 记 master，零通信），唯一区别是清单长度为 2。下表沿用表 7 的逐 rank 视角。</p>
+    <p style="margin:14px 0 6px"><b class="k">表 16 · Write 双向（L163：<code>doMemcpyVector({peer1, src2}, {src1, peer2})</code>，偏好 = PREFER_SRC_CONTEXT）</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:900px">
+      <tr><th>输入项</th><th>rank0</th><th>rank1</th><th>rank2</th><th>rank3</th><th>一致性</th></tr>
+      <tr><td class="stage">实参 1 → srcNodesUnfiltered（长度 2）<br><span style="font-size:12px;color:#5f6368">全量候选源清单 = {peer1, src2}</span></td><td>本进程的 peer1、src2 实例</td><td>同左</td><td>同左</td><td>同左</td><td>同一份任务表，各持一份（见 3.3）</td></tr>
+      <tr><td class="stage">　└ 各元素 MPI_rank<br><span style="font-size:12px;color:#5f6368">owner 标签，标注执行者的依据</span></td><td>[2, 0]</td><td>[2, 0]</td><td>[2, 0]</td><td>[2, 0]</td><td>完全相同（peer1 归 rank2，src2 归 rank0）</td></tr>
+      <tr><td class="stage">实参 2 → dstNodesUnfiltered（长度 2）<br><span style="font-size:12px;color:#5f6368">全量候选目标清单 = {src1, peer2}</span></td><td>本进程的 src1、peer2 实例</td><td>同左</td><td>同左</td><td>同左</td><td>与实参 1 按位配对成 2 个任务</td></tr>
+      <tr><td class="stage">　└ 各元素 MPI_rank</td><td>[0, 2]</td><td>[0, 2]</td><td>[0, 2]</td><td>[0, 2]</td><td>完全相同（src1 归 rank0，peer2 归 rank2）</td></tr>
+      <tr><td class="stage">ctxPreference<br><span style="font-size:12px;color:#5f6368">决定标 src 侧还是 dst 侧执行</span></td><td>PREFER_SRC_CONTEXT</td><td>同左</td><td>同左</td><td>同左</td><td>相同（Write → SRC，用例级常量）</td></tr>
+      <tr><td class="stage">worldRank（认领比较用）</td><td><b>0</b></td><td><b>1</b></td><td><b>2</b></td><td><b>3</b></td><td><b>★唯一不同——分活的全部依据</b></td></tr>
+      <tr><td class="stage">ranksUnfiltered（标注后）<br><span style="font-size:12px;color:#5f6368">每任务的执行者名单——两遍循环的产物</span></td><td>[2, 0]</td><td>[2, 0]</td><td>[2, 0]</td><td>[2, 0]</td><td>长度 2；task0 走 src 分支归 rank2，task1 归 rank0，全员同值</td></tr>
+      <tr><td class="stage">contextsUnfiltered（标注后）<br><span style="font-size:12px;color:#5f6368">执行者的 CUDA ctx——全员答案表</span></td><td>[本进程 ctx] ×2</td><td>同左</td><td>同左</td><td>同左</td><td>长度 2；CUcontext 是进程本地资源，只有执行者那份会被消费</td></tr>
+      <tr><td class="stage">srcNodes（认领后）<br><span style="font-size:12px;color:#5f6368">认领到的 src 活清单（进返回值）</span></td><td>[&amp;src2]（1 项）</td><td>[]</td><td>[&amp;peer1]（1 项）</td><td>[]</td><td>标注值 == worldRank 才收活：两端各认领 1 个任务</td></tr>
+      <tr><td class="stage">dstNodes（认领后）</td><td>[&amp;peer2]（1 项）</td><td>[]</td><td>[&amp;src1]（1 项）</td><td>[]</td><td>与 srcNodes 同步收</td></tr>
+      <tr><td class="stage">contexts（认领后）</td><td>[自己的 ctx]</td><td>[]</td><td>[自己的 ctx]</td><td>[]</td><td>doMemcpyCore 里 cuCtxSetCurrent 消费</td></tr>
+      <tr><td class="stage">originalRanks（随返回值带出）<br><span style="font-size:12px;color:#5f6368">未过滤执行者表，结果 Bcast 对账用</span></td><td>[2, 0]</td><td>[2, 0]</td><td>[2, 0]</td><td>[2, 0]</td><td>calculateVectorBandwidth 逐任务按它选 Bcast root</td></tr>
+      <tr><td class="stage">rankOfFirstMemcpy（记下的 master）</td><td>2</td><td>2</td><td>2</td><td>2</td><td>= ranksUnfiltered[0] = task0 执行者；双向 Write 的 master 在对端（单向恒为 pair.first，见 2.7）</td></tr>
+    </table>
+    </div>
+    <ul style="margin-top:12px">
+      <li><b>与表 7（单向）的两点差异：</b>①未过滤清单长度 1 → 2，标注表从 [0] 变成 [2, 0]，活被拆给两个执行 rank；②master = ranksUnfiltered[0] = rank2（对端），不再恒为 pair.first——这是双向 Write 时闸门 master 换端的直接来源。</li>
+      <li><b>机制零变化：</b>仍是"全员相同输入 + 相同代码 + 只有 worldRank 不同"的零通信分活；rank1 / rank3 同样完整跑完两遍循环，只是认领结果为空（长度即身份），随后照样进入引擎陪 Barrier / Bcast。</li>
+      <li><b>Read 变体：</b>偏好换 PREFER_DST_CONTEXT，第一遍循环查 dst 侧——标注表变 [0, 2]，两端角色对调（task0 归 rank0、master = rank0），其余完全一致。</li>
+    </ul>
+  </div>
+
+  <h3 id="sec-bidir-flow" style="font-size:19px; margin:34px 0 12px; color:var(--a);">3.4 run() 流程图</h3>
+  <div class="legend">
+    <span><i style="background:#e8eff7;border-color:#2f5d8a"></i>所有 rank 相同动作</span>
+    <span><i style="background:#f2eafa;border-color:#7b3fa0"></i>含 MPI 通信</span>
+    <span><i style="background:#e6f4ea;border-color:#2e7d4f"></i>构造任务 / 执行测量</span>
+    <span><i style="background:#f4f5f7;border-color:#9aa0a6;border-style:dashed"></i>镜像旁路（零 MPI）</span>
+    <span><i style="background:#fbeee1;border-color:#b5651d"></i>资源清理</span>
+    <span><i style="background:#fff8e1;border-color:#d9b64a"></i>判断</span>
+  </div>
+
+  <div class="card">
+  <p style="margin:0 0 6px"><b class="k">图 6 · 双向 run() 流程</b></p>
+  <svg viewBox="0 0 1160 1520" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+      </marker>
+    </defs>
+
+    <rect x="150" y="20" width="480" height="52" rx="26" fill="#2f5d8a"/>
+    <text x="390" y="53" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="600">开始：mpirun 启动 4 个 rank · 全部进入 run()</text>
+    <line x1="390" y1="72" x2="390" y2="94" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <rect x="200" y="98" width="380" height="110" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="124" font-size="15" font-weight="700" fill="#2f5d8a">① 初始化（所有 rank）</text>
+    <text x="215" y="149" font-size="13" fill="#1a1a1a">建 3 张带宽矩阵：Write1 / Write2 / Total</text>
+    <text x="215" y="171" font-size="13" fill="#1a1a1a">构造 MemcpyOperation（引擎 + NodeHelperMulti</text>
+    <text x="215" y="193" font-size="13" fill="#1a1a1a">+ 方向偏好 + VECTOR_BW 口径）</text>
+    <line x1="390" y1="208" x2="390" y2="240" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <rect x="200" y="244" width="380" height="88" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="270" font-size="15" font-weight="700" fill="#7b3fa0">② generateTestPairs（所有 rank）</text>
+    <text x="215" y="295" font-size="13" fill="#1a1a1a">rank0 生成全部有序对并洗牌（固定种子）</text>
+    <text x="215" y="317" font-size="13" fill="#1a1a1a">广播列表（静态缓存，细节同 2.4）【MPI：Bcast】</text>
+    <line x1="390" y1="332" x2="390" y2="364" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <rect x="200" y="368" width="380" height="44" rx="22" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="390" y="396" text-anchor="middle" font-size="14.5" font-weight="600" fill="#2f5d8a">③ cachedPairLoop 取下一对 pair（首对 (0, 2)）</text>
+    <line x1="390" y1="412" x2="390" y2="444" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <polygon points="390,448 570,500 390,552 210,500" fill="#fff8e1" stroke="#d9b64a" stroke-width="1.8"/>
+    <text x="390" y="494" text-anchor="middle" font-size="13.5" font-weight="700" fill="#8a6d1a">src &gt; dst 且</text>
+    <text x="390" y="514" text-anchor="middle" font-size="13.5" font-weight="700" fill="#8a6d1a">镜像格 (dst, src) 已有值？</text>
+    <text x="585" y="490" font-size="12.5" font-weight="600" fill="#8a8f98">是</text>
+    <line x1="570" y1="500" x2="696" y2="500" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+    <rect x="700" y="462" width="430" height="76" rx="10" fill="#f4f5f7" stroke="#9aa0a6" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <text x="715" y="488" font-size="14" font-weight="700" fill="#8a8f98">镜像旁路（零 MPI）</text>
+    <text x="715" y="510" font-size="12.5" fill="#1a1a1a">三张矩阵照抄 (dst, src) 的值——</text>
+    <text x="715" y="528" font-size="12.5" fill="#1a1a1a">不建 buffer、不测量</text>
+    <line x1="915" y1="462" x2="915" y2="390" stroke="#6b7280" stroke-width="2"/>
+    <line x1="915" y1="390" x2="588" y2="390" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="402" y="572" font-size="12.5" font-weight="600" fill="#2e7d4f">否</text>
+    <line x1="390" y1="552" x2="390" y2="584" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <rect x="200" y="588" width="380" height="110" rx="10" fill="#f2eafa" stroke="#7b3fa0" stroke-width="1.5"/>
+    <text x="215" y="614" font-size="15" font-weight="700" fill="#7b3fa0">④ 构造 4 块 Unicast（owner 分工）</text>
+    <text x="215" y="639" font-size="13" fill="#1a1a1a">src1 / src2（owner = rank0）、peer1 / peer2（owner = rank2）</text>
+    <text x="215" y="661" font-size="13" fill="#1a1a1a">每块：owner 建 → Bcast 句柄 → 全员 map / setAccess</text>
+    <text x="215" y="683" font-size="13" fill="#1a1a1a">收尾 Barrier【MPI：4 Bcast + 4 Barrier】</text>
+    <line x1="390" y1="698" x2="390" y2="730" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <rect x="200" y="734" width="380" height="88" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.5"/>
+    <text x="215" y="760" font-size="15" font-weight="700" fill="#2e7d4f">⑤ 组交叉任务清单</text>
+    <text x="215" y="785" font-size="13" fill="#1a1a1a">srcNodes = {peer1, src2}，peerNodes = {src1, peer2}</text>
+    <text x="215" y="807" font-size="13" fill="#1a1a1a">task0 = 对端→本端，task1 = 本端→对端</text>
+    <line x1="390" y1="822" x2="390" y2="854" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <rect x="140" y="858" width="760" height="172" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="1.8"/>
+    <text x="155" y="884" font-size="15" font-weight="700" fill="#2e7d4f">⑥ doMemcpyVector：派发 + 采样 + 归集（两端 concurrently 进同一引擎）</text>
+    <text x="155" y="909" font-size="13" fill="#1a1a1a">dispatchMemcpy 零通信分活：两端各认领 1 个任务（Write：task0→rank2、task1→rank0）</text>
+    <text x="155" y="931" font-size="13" fill="#1a1a1a">doMemcpyCore × 3 轮采样（同 2.9）：两端各 1 流 / 1 闸门 / 1 对 event</text>
+    <text x="155" y="953" font-size="13" fill="#1a1a1a">每轮：memset → 闸门 → warmup → startEvent → 拷贝 × loopCount → endEvent</text>
+    <text x="155" y="975" font-size="13" fill="#1a1a1a">Release：master 过 host 闩针 → 写共享 device 闩针 → 两端同时起跑、各自计时</text>
+    <text x="155" y="997" font-size="13" fill="#1a1a1a">等流（Iprobe 心跳）→ Barrier → memcmp → event 算带宽</text>
+    <text x="155" y="1019" font-size="12.5" fill="#5f6368">calculateVectorBandwidth：逐任务 Bcast ×2 → {BW(task0), BW(task1)}【MPI：Bcast ×2】</text>
+    <line x1="390" y1="1030" x2="390" y2="1060" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <rect x="200" y="1064" width="380" height="72" rx="10" fill="#fbeee1" stroke="#b5651d" stroke-width="1.5"/>
+    <text x="215" y="1090" font-size="14" font-weight="700" fill="#b5651d">⑦ 析构 4 块 buffer</text>
+    <text x="215" y="1115" font-size="13" fill="#1a1a1a">unmap / release / addressFree【MPI：4 Barrier】</text>
+    <line x1="390" y1="1136" x2="390" y2="1168" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <rect x="200" y="1172" width="380" height="88" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="1.5"/>
+    <text x="215" y="1198" font-size="15" font-weight="700" fill="#2f5d8a">⑧ 写矩阵</text>
+    <text x="215" y="1223" font-size="13" fill="#1a1a1a">m1(first, second) = BW(task0)，m2 = BW(task1)</text>
+    <text x="215" y="1245" font-size="13" fill="#1a1a1a">Total = 两者之和</text>
+    <line x1="390" y1="1260" x2="390" y2="1292" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <polygon points="390,1296 550,1348 390,1400 230,1348" fill="#fff8e1" stroke="#d9b64a" stroke-width="1.8"/>
+    <text x="390" y="1354" text-anchor="middle" font-size="13.5" font-weight="700" fill="#8a6d1a">还有 pair？</text>
+    <text x="150" y="1340" font-size="12.5" font-weight="600" fill="#2e7d4f">是</text>
+    <line x1="230" y1="1348" x2="120" y2="1348" stroke="#6b7280" stroke-width="2"/>
+    <line x1="120" y1="1348" x2="120" y2="390" stroke="#6b7280" stroke-width="2"/>
+    <line x1="120" y1="390" x2="196" y2="390" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="402" y="1420" font-size="12.5" font-weight="600" fill="#8a8f98">否</text>
+    <line x1="390" y1="1400" x2="390" y2="1432" stroke="#6b7280" stroke-width="2" marker-end="url(#arr)"/>
+
+    <rect x="150" y="1436" width="480" height="64" rx="26" fill="#2e7d4f"/>
+    <text x="390" y="1460" text-anchor="middle" fill="#ffffff" font-size="15" font-weight="600">⑨ recordStability（Total 矩阵）</text>
+    <text x="390" y="1482" text-anchor="middle" fill="#ffffff" font-size="12.5">输出 Write1 / Write2 / Total 三张矩阵（含 CV 稳定性指标）</text>
+  </svg>
+  </div>
+
+  <h3 id="sec-bidir-core" style="font-size:19px; margin:34px 0 12px; color:var(--a);">3.5 双向并发的逐 rank 时序</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p style="margin:0 0 6px">以 Write（PREFER_SRC）为例、pair (0, 2)；Read 时两端角色对调（task0 归 rank0、master = rank0）。引擎细节同 2.9，此处只列双向差异点。</p>
+    <p style="margin:0 0 6px"><b class="k">表 17 · 每轮采样的逐 rank 时序（pair 0,2 Write，双执行者版）</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:1100px">
+      <tr><th>时序</th><th>rank0（执行者 · task1：0→2）</th><th>rank2（执行者 · master · task0：2→0）</th><th>rank1 / rank3（空闲者）</th></tr>
+      <tr><td class="stage">T1</td><td>建测量基础设施：1 条 stream + start/end event + 探测实际拷贝大小 + totalEnd（VECTOR_BW 不消费，占位）</td><td>同左——为自己的 task0 建一套</td><td>仅建 totalEnd 占位</td></tr>
+      <tr><td class="stage">T2</td><td>闸门闩针清 0：自己 host 闩针 = 0 + 共享 device 闩针 memset = 0，随后 Barrier <b style="color:#5b3fa8">【MPI：Barrier】</b></td><td>同左</td><td>同左（义务动作，一个不缺）</td></tr>
+      <tr><td class="stage">T3</td><td>memset 自己任务的两块：src2（本地，源 pattern BAADF00D）+ peer2（跨节点写，目的地 pattern CAFEBABE）</td><td>memset peer1（本地，BAADF00D）+ src1（跨节点写，CAFEBABE）——4 块 buffer 被两个执行者不重不漏各填一次</td><td>跳过</td></tr>
+      <tr><td class="stage">T4</td><td>入队闸门（<b>非 master 变体</b>：只等共享 device 闩针）+ 预热拷贝 ×WARMUP_COUNT（不计时）</td><td>入队闸门（<b>master 变体</b>：先等自己的 host 闩针，通过后写共享 device 闩针）+ 预热</td><td>跳过</td></tr>
+      <tr><td class="stage">T5</td><td>记 startEvents[0]：自己流的起跑锚点（各 rank 仅 1 个任务，WaitEvent 锚点链休眠）</td><td>同左</td><td>跳过</td></tr>
+      <tr><td class="stage">T6</td><td>入队 16 次正式拷贝（src2 → peer2，方向 0→2）+ endEvent——只排队，闸门未开不执行</td><td>入队 16 次正式拷贝（peer1 → src1，方向 2→0）+ endEvent</td><td>跳过</td></tr>
+      <tr><td class="stage">T7</td><td>记 totalEnd（占位）→ Release：写自己的 host 闩针 = 1（本 rank 闩针无人读——master 是 rank2）</td><td>记 totalEnd → Release：写自己的 host 闩针 = 1 → master 的 spin kernel 通过第一跳 → <b>写共享 device 闩针 = 1</b>（闩针物理驻留 rank0 的 GPU，这是一次跨节点 4 字节写）→ 两端的流同时放行、双向对开——两级闩针链两跳满载（本步<b>无 MPI</b>）</td><td>写自己的 host 闩针 = 1（无人读，纯义务）</td></tr>
+      <tr><td class="stage">T8</td><td>等自己的流跑完 16 次拷贝 <b style="color:#5b3fa8">【MPI：等流期间 MPI_Iprobe 心跳】</b></td><td>同左</td><td>无流可等，0 次循环直接过</td></tr>
+      <tr><td class="stage">T9</td><td>Barrier：确认拷贝阶段全员结束 <b style="color:#5b3fa8">【MPI：Barrier】</b></td><td>同左</td><td>同左</td></tr>
+      <tr><td class="stage">T10</td><td>memcmp 自己任务的目的地：peer2 == 源 pattern（跨节点映射，本地直接读）</td><td>memcmp src1 == 源 pattern</td><td>空清单 0 次</td></tr>
+      <tr><td class="stage">T11</td><td>endEvent − startEvent → task1 带宽 → bandwidthStats[0]（3 轮各累积 1 点）</td><td>同左（task0）</td><td>空循环</td></tr>
+      <tr><td class="stage">T12</td><td>n = 1, 2：重复 T2–T11</td><td>同左</td><td>重复义务部分</td></tr>
+      <tr><td class="stage">T13</td><td>销毁 stream + 2 个 event + totalEnd</td><td>同左</td><td>销毁 totalEnd</td></tr>
+      <tr><td class="stage">T14</td><td>VECTOR_BW 出口：本地 stats[0] → returnAppropriateMetric → calculateVectorBandwidth 按 originalRanks = {rank2, rank0} 归集：task0 由 rank2 当 root、task1 由 rank0 当 root，各 Bcast 一次，全员拼出 {BW(2→0), BW(0→2)} <b style="color:#5b3fa8">【MPI：Bcast ×2】</b></td><td>同左（task0 的 root）</td><td>接收 2 次 Bcast，拼出同一向量 <b style="color:#5b3fa8">【MPI：Bcast ×2】</b></td></tr>
+    </table>
+    </div>
+    <div class="note" style="margin-top:12px">
+      <b>MPI 账目（每轮采样）：</b>2 Barrier（T2 / T9）+ 两个执行者等流期间的 MPI_Iprobe 心跳（空闲者无流可等，直接进 Barrier）；doMemcpyVector 收尾 2 次 Bcast（VECTOR_BW 逐任务）；4 块 buffer 构造 / 析构另计（4 Bcast + 8 Barrier）。双向与单向的最大差别不在 MPI——在 GPU 侧：两个方向由同一把共享闩针放行，各自独立计时、独立校验。
+    </div>
+  </div>
+
+  <h2 id="sec-a21" style="margin-top:44px">四、MultinodeAllToOneWriteSM 精读（多对 1 聚合写）</h2>
+  <div class="card" style="margin-bottom:14px">
+    <p>每轮锁定一个目标 GPU（dstDeviceId），其余 W−1 个 GPU 同时往它写：srcNodes 由 W−1 个 Local（源，各自 rank 自己的显存）组成，dstNodes 由 W−1 个 Unicast（目标，物理显存全部在被写目标那块卡上，各 rank 各自映射）组成。执行引擎与第二章单向完全同一套（doMemcpy → dispatchMemcpy → doMemcpyCore，偏好 PREFER_SRC 按源 buffer 的 owner 分活），差异只在清单形状（长度 W−1）与出口口径（SUM_BW 把 W−1 份带宽加总，含义是"目标卡的入向聚合带宽"）。结果矩阵为 1×W，每列对应一轮，全部填满、无 N/A。</p>
+    <p style="margin-top:8px">下面两节按轮展开，每张表纵向按阶段、横向按 rank 对齐：<b>阶段①</b>为本轮任务清单构造完成后的状态（过滤前，所有 rank 的清单结构完全相同，差异只在 Local 缓冲的"成色"——只有 owner 等于自己的那个真的分配了显存，其余是只携带归属标签的空壳）；<b>阶段②</b>为 dispatchMemcpy 按 PREFER_SRC 认领后的状态（每个执行 rank 恰好认领 1 个任务，被写目标认领 0 个）；最后一行是本轮各 rank 的实际动作。</p>
+  </div>
+
+  <h3 id="sec-a21-r0" style="font-size:19px; margin:34px 0 12px; color:var(--a);">4.1 第一轮：所有 → GPU0</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p style="margin:0 0 6px">dstDeviceId = 0，任务清单共 3 个：Local(1)→Unicast(0)、Local(2)→Unicast(0)、Local(3)→Unicast(0)。3 份目标缓冲的物理显存都在 GPU0 上（由 rank0 作为 owner 逐个申请并广播句柄，其余 rank 各自导入映射，人人持有有效 VA；同一轮内 3 个 Unicast 对应 3 块互相独立的物理分配）。</p>
+    <p style="margin:0 0 6px"><b class="k">表 18 · 第一轮（dstDeviceId = 0）逐 rank 两阶段对照</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:1150px">
+      <tr><th>阶段</th><th>rank0（被写目标）</th><th>rank1</th><th>rank2</th><th>rank3</th></tr>
+      <tr><td class="stage">① 清单构造完（过滤前）</td><td>srcNodes = [Local(1), Local(2), Local(3)]<br>dstNodes = [Unicast(0) ×3]<br><b>3 个 Local 全是空壳</b>（没有一个是自己的）；3 个 Unicast 为有效 VA（物理就在本卡）</td><td>清单同左<br><b>只有 Local(1) 有真实显存</b>，Local(2)/Local(3) 空壳</td><td>清单同左<br><b>只有 Local(2) 有真实显存</b>，Local(1)/Local(3) 空壳</td><td>清单同左<br><b>只有 Local(3) 有真实显存</b>，Local(1)/Local(2) 空壳</td></tr>
+      <tr><td class="stage">② dispatchMemcpy 认领后（过滤后）</td><td><b>认领 0 个：三个 vector 全空</b>——src.owner 是 1/2/3，都不等于自己；无 stream、无 kernel</td><td>认领 1 个：Local(1)→Unicast(0)，contexts = [GPU1 上下文]</td><td>认领 1 个：Local(2)→Unicast(0)，contexts = [GPU2 上下文]</td><td>认领 1 个：Local(3)→Unicast(0)，contexts = [GPU3 上下文]</td></tr>
+      <tr><td class="stage">本轮动作</td><td><b>不执行</b>：GPU 纯空闲、无流可等、不参与闸门，只陪跑到 Barrier</td><td>SM copy kernel 入队单流：读本卡 Local(1) → 写 GPU0 的 Unicast(0)</td><td>入队单流：读本卡 Local(2) → 写 GPU0 的 Unicast(0)</td><td>入队单流：读本卡 Local(3) → 写 GPU0 的 Unicast(0)</td></tr>
+    </table>
+    </div>
+    <div class="note" style="margin-top:12px">
+      收尾：3 个执行任务各自计时得 3 份带宽，SUM_BW 口径加总 = GPU0 的入向聚合带宽，填入结果矩阵 value(0, 0) 这一格；随后 3 对 buffer 全员 delete（析构内 Barrier 对齐后解映射、释放物理显存），进入下一轮。
+    </div>
+  </div>
+
+  <h3 id="sec-a21-r1" style="font-size:19px; margin:34px 0 12px; color:var(--a);">4.2 第二轮：所有 → GPU1</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p style="margin:0 0 6px">dstDeviceId = 1，任务清单共 3 个：Local(0)→Unicast(1)、Local(2)→Unicast(1)、Local(3)→Unicast(1)。3 份目标缓冲的物理显存全部换到 GPU1 上（本轮 owner 是 rank1），机制与第一轮逐字相同，只是"空手者"从 rank0 换成 rank1。</p>
+    <p style="margin:0 0 6px"><b class="k">表 19 · 第二轮（dstDeviceId = 1）逐 rank 两阶段对照</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:1150px">
+      <tr><th>阶段</th><th>rank0</th><th>rank1（被写目标）</th><th>rank2</th><th>rank3</th></tr>
+      <tr><td class="stage">① 清单构造完（过滤前）</td><td>srcNodes = [Local(0), Local(2), Local(3)]<br>dstNodes = [Unicast(1) ×3]<br><b>只有 Local(0) 有真实显存</b>，Local(2)/Local(3) 空壳</td><td>清单同左<br><b>3 个 Local 全是空壳</b>（自己的 Local(1) 不在清单里）；3 个 Unicast 为有效 VA（物理就在本卡）</td><td>清单同左<br><b>只有 Local(2) 有真实显存</b>，Local(0)/Local(3) 空壳</td><td>清单同左<br><b>只有 Local(3) 有真实显存</b>，Local(0)/Local(2) 空壳</td></tr>
+      <tr><td class="stage">② dispatchMemcpy 认领后（过滤后）</td><td>认领 1 个：Local(0)→Unicast(1)，contexts = [GPU0 上下文]</td><td><b>认领 0 个：三个 vector 全空</b>——src.owner 是 0/2/3，都不等于自己；无 stream、无 kernel</td><td>认领 1 个：Local(2)→Unicast(1)，contexts = [GPU2 上下文]</td><td>认领 1 个：Local(3)→Unicast(1)，contexts = [GPU3 上下文]</td></tr>
+      <tr><td class="stage">本轮动作</td><td>SM copy kernel 入队单流：读本卡 Local(0) → 写 GPU1 的 Unicast(1)</td><td><b>不执行</b>：GPU 纯空闲、无流可等、不参与闸门，只陪跑到 Barrier</td><td>入队单流：读本卡 Local(2) → 写 GPU1 的 Unicast(1)</td><td>入队单流：读本卡 Local(3) → 写 GPU1 的 Unicast(1)</td></tr>
+    </table>
+    </div>
+    <div class="note" style="margin-top:12px">
+      收尾：SUM_BW 加总 = GPU1 的入向聚合带宽，填入 value(0, 1)。后续 dstDeviceId = 2、3 两轮同理轮换（空手者依次为 rank2、rank3），4 轮跑完 1×4 矩阵填满；列间数值接近说明 NVLink 交换拓扑均衡，对标时看单列值（单卡聚合带宽）而非矩阵 SUM 行。
+    </div>
+  </div>
+
+  <h2 id="sec-af1" style="margin-top:44px">五、MultinodeAllFromOneReadSM 精读（1 源多读聚合读）</h2>
+  <div class="card" style="margin-bottom:14px">
+    <p>与第四章互为镜像：每轮锁定一个源 GPU（srcDeviceId），其余 W−1 个 GPU 同时<b>读它</b>——写场景是各执行者"推"数据过 NVLink 到远端目标，读场景是各执行者"拉"远端源数据落到本地。清单组合随之对调：srcNodes 由 W−1 个 Unicast（源，物理显存全在被读方那块卡上）组成，dstNodes 由 W−1 个 Local（读方各自的本地缓冲）组成。偏好为 PREFER_DST，按目标 buffer 的 owner 分活——执行者恰好就是各读方自己，上下文也是读方本地的。出口同为 SUM_BW，含义变成"被读 GPU 的出向聚合带宽"；结果矩阵仍为 1×W，每列对应一轮被读的源卡。</p>
+    <p style="margin-top:8px">表结构与第四章一致：<b>阶段①</b>为本轮清单构造完成后的状态（过滤前，人人清单相同，差异只在 Local 的"成色"）；<b>阶段②</b>为 dispatchMemcpy 认领后的状态（每个读方认领 1 个任务，被读源认领 0 个）；最后一行为本轮实际动作。</p>
+  </div>
+
+  <h3 id="sec-af1-r0" style="font-size:19px; margin:34px 0 12px; color:var(--a);">5.1 第一轮：GPU0 → 所有</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p style="margin:0 0 6px">srcDeviceId = 0，任务清单共 3 个：Unicast(0)→Local(1)、Unicast(0)→Local(2)、Unicast(0)→Local(3)。3 份源缓冲的物理显存都在 GPU0 上（rank0 作为 owner 逐个申请并广播句柄，人人映射有效 VA，3 个 Unicast 对应 3 块互相独立的物理分配）；3 份本地目标缓冲分别由 rank1/2/3 各自分配。</p>
+    <p style="margin:0 0 6px"><b class="k">表 20 · 第一轮（srcDeviceId = 0）逐 rank 两阶段对照</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:1150px">
+      <tr><th>阶段</th><th>rank0（被读源）</th><th>rank1</th><th>rank2</th><th>rank3</th></tr>
+      <tr><td class="stage">① 清单构造完（过滤前）</td><td>srcNodes = [Unicast(0), Unicast(0), Unicast(0)]<br>dstNodes = [Local(1), Local(2), Local(3)]<br><b>3 个 Local 全是空壳</b>（没有一个是自己的）；3 个 Unicast 为有效 VA（物理就在本卡）</td><td>清单同左<br><b>只有 Local(1) 有真实显存</b>，Local(2)/Local(3) 空壳</td><td>清单同左<br><b>只有 Local(2) 有真实显存</b>，Local(1)/Local(3) 空壳</td><td>清单同左<br><b>只有 Local(3) 有真实显存</b>，Local(1)/Local(2) 空壳</td></tr>
+      <tr><td class="stage">② dispatchMemcpy 认领后（过滤后）</td><td><b>认领 0 个：三个 vector 全空</b>——dst.owner 是 1/2/3，都不等于自己；无 stream、无 kernel</td><td>认领 1 个：Unicast(0)→Local(1)，contexts = [GPU1 上下文]</td><td>认领 1 个：Unicast(0)→Local(2)，contexts = [GPU2 上下文]</td><td>认领 1 个：Unicast(0)→Local(3)，contexts = [GPU3 上下文]</td></tr>
+      <tr><td class="stage">本轮动作</td><td><b>不执行</b>：GPU 纯空闲、无流可等、不参与闸门，只陪跑到 Barrier（它只是被动地被大家读）</td><td>SM copy kernel 入队单流：读 GPU0 的 Unicast(0)（跨节点拉取）→ 写本卡 Local(1)</td><td>入队单流：读 GPU0 的 Unicast(0) → 写本卡 Local(2)</td><td>入队单流：读 GPU0 的 Unicast(0) → 写本卡 Local(3)</td></tr>
+    </table>
+    </div>
+    <div class="note" style="margin-top:12px">
+      收尾：3 个读任务各自计时得 3 份带宽，SUM_BW 加总 = GPU0 的出向聚合带宽（同时被 3 块卡读时能吐出的总吞吐），填入结果矩阵 value(0, 0)；随后 3 对 buffer 全员 delete，进入下一轮。与写场景的物理差异：NVLink 读写带宽通常不对称，且发起方的 SM 开销从"组织写请求"变为"发起读请求+接收响应"，因此本用例与第四章数值不可互换使用。
+    </div>
+  </div>
+
+  <h3 id="sec-af1-r1" style="font-size:19px; margin:34px 0 12px; color:var(--a);">5.2 第二轮：GPU1 → 所有</h3>
+  <div class="card" style="margin-bottom:14px">
+    <p style="margin:0 0 6px">srcDeviceId = 1，任务清单共 3 个：Unicast(1)→Local(0)、Unicast(1)→Local(2)、Unicast(1)→Local(3)。3 份源缓冲的物理显存全部换到 GPU1 上（本轮 owner 是 rank1），机制与第一轮逐字相同，只是"空手者"从 rank0 换成 rank1。</p>
+    <p style="margin:0 0 6px"><b class="k">表 21 · 第二轮（srcDeviceId = 1）逐 rank 两阶段对照</b></p>
+    <div class="tbl-wrap">
+    <table class="sum" style="min-width:1150px">
+      <tr><th>阶段</th><th>rank0</th><th>rank1（被读源）</th><th>rank2</th><th>rank3</th></tr>
+      <tr><td class="stage">① 清单构造完（过滤前）</td><td>srcNodes = [Unicast(1), Unicast(1), Unicast(1)]<br>dstNodes = [Local(0), Local(2), Local(3)]<br><b>只有 Local(0) 有真实显存</b>，Local(2)/Local(3) 空壳</td><td>清单同左<br><b>3 个 Local 全是空壳</b>（自己的 Local(1) 不在清单里）；3 个 Unicast 为有效 VA（物理就在本卡）</td><td>清单同左<br><b>只有 Local(2) 有真实显存</b>，Local(0)/Local(3) 空壳</td><td>清单同左<br><b>只有 Local(3) 有真实显存</b>，Local(0)/Local(2) 空壳</td></tr>
+      <tr><td class="stage">② dispatchMemcpy 认领后（过滤后）</td><td>认领 1 个：Unicast(1)→Local(0)，contexts = [GPU0 上下文]</td><td><b>认领 0 个：三个 vector 全空</b>——dst.owner 是 0/2/3，都不等于自己；无 stream、无 kernel</td><td>认领 1 个：Unicast(1)→Local(2)，contexts = [GPU2 上下文]</td><td>认领 1 个：Unicast(1)→Local(3)，contexts = [GPU3 上下文]</td></tr>
+      <tr><td class="stage">本轮动作</td><td>SM copy kernel 入队单流：读 GPU1 的 Unicast(1)（跨节点拉取）→ 写本卡 Local(0)</td><td><b>不执行</b>：GPU 纯空闲、无流可等、不参与闸门，只陪跑到 Barrier</td><td>入队单流：读 GPU1 的 Unicast(1) → 写本卡 Local(2)</td><td>入队单流：读 GPU1 的 Unicast(1) → 写本卡 Local(3)</td></tr>
+    </table>
+    </div>
+    <div class="note" style="margin-top:12px">
+      收尾：SUM_BW 加总 = GPU1 的出向聚合带宽，填入 value(0, 1)。后续 srcDeviceId = 2、3 两轮同理轮换（空手者依次为 rank2、rank3），4 轮跑完 1×4 矩阵填满，每列含义为"该列 GPU 作为数据源被其余所有卡同时读时的总出向带宽"。
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

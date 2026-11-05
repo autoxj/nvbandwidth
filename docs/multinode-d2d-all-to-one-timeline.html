@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多节点 D2D 1 对 1：4 rank 执行顺序与 MPI 流程</title>
+<style>
+  :root {
+    --a: #2f5d8a;
+    --a-light: #e8eff7;
+    --b: #b5651d;
+    --b-light: #fbeee1;
+    --go: #2e7d4f;
+    --go-light: #e6f4ea;
+    --mpi: #7b3fa0;
+    --mpi-light: #f2eafa;
+    --ink: #1a1a1a;
+    --muted: #5f6368;
+    --line: #dfe3e8;
+    --paper: #ffffff;
+    --bg: #f6f7f9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px 36px 64px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+  }
+  .page { max-width: 1800px; margin: 0 auto; }
+  h1 { font-size: 32px; margin: 0 0 10px; letter-spacing: 0.5px; }
+  h2 { font-size: 23px; margin: 46px 0 14px; padding-left: 12px; border-left: 5px solid var(--a); }
+  p { margin: 8px 0; }
+  .sub { color: var(--muted); margin: 0 0 22px; }
+  .card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 22px 26px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  }
+  .params { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+  .param {
+    background: #f1f3f6;
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 14px;
+    color: #30343a;
+  }
+  .param b { color: var(--a); }
+  .nodes { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 8px; }
+  .node { border-radius: 12px; padding: 16px 20px; border: 1px solid var(--line); background: var(--paper); }
+  .node.a { border-top: 5px solid var(--a); }
+  .node.b { border-top: 5px solid var(--b); }
+  .node h3 { margin: 0 0 10px; font-size: 18px; }
+  .node.a h3 { color: var(--a); }
+  .node.b h3 { color: var(--b); }
+  .chips { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .chip {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 14px;
+    background: #fafbfc;
+  }
+  .chip.active { background: var(--a-light); border-color: var(--a); }
+  .chip.target { background: var(--go-light); border-color: var(--go); }
+  .chip.idle { background: #f4f5f7; color: #8a8f98; border-style: dashed; }
+  .chip .rk { color: var(--muted); font-size: 13px; display: block; }
+  .chip b { font-size: 15px; }
+  figure { margin: 0; }
+  figcaption { color: var(--muted); font-size: 14px; margin-top: 10px; }
+  svg { width: 100%; max-width: 1400px; height: auto; display: block; margin: 0 auto; }
+  .tl-wrap { overflow-x: auto; }
+  table.tl { width: 100%; min-width: 1500px; border-collapse: separate; border-spacing: 5px; }
+  table.tl th {
+    background: #eceff3;
+    color: #30343a;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 9px 6px;
+    border-radius: 6px;
+    text-align: center;
+    white-space: nowrap;
+  }
+  table.tl th.s0 { background: var(--a-light); color: var(--a); }
+  table.tl th.s2 { background: var(--go-light); color: var(--go); }
+  table.tl th.stage { text-align: left; padding-left: 14px; }
+  table.tl td {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 10px;
+    font-size: 13px;
+    text-align: center;
+    vertical-align: middle;
+    line-height: 1.6;
+  }
+  table.tl td.stage { text-align: left; min-width: 330px; padding: 10px 14px; }
+  td.stage b { display: block; font-size: 14.5px; }
+  td.stage span { color: var(--muted); font-size: 12px; display: block; }
+  .tag {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-style: normal;
+    font-weight: 600;
+  }
+  .tag.mpi { background: var(--mpi-light); color: var(--mpi); border: 1px solid #d9c2ec; }
+  .tag.loc { background: #f1f3f6; color: #5f6368; border: 1px solid #dfe3e8; }
+  .tag.gpu { background: #fdf1e2; color: #8a5a12; border: 1px solid #ecd0a8; }
+  td.loopbar {
+    background: #eef2f7 !important;
+    color: #3a4a5e !important;
+    text-align: left !important;
+    font-size: 13px !important;
+    padding: 9px 16px !important;
+    border-left: 5px solid #7b3fa0 !important;
+  }
+  td.act { background: var(--a-light) !important; border-color: #b9cde3 !important; }
+  td.actdst { background: var(--go-light) !important; border-color: #b7dcc4 !important; }
+  td.idle { background: #f4f5f7 !important; color: #8a8f98; }
+  td.wait { background: #fff8e1 !important; border-color: #d9b64a !important; }
+  td.hot { background: var(--go-light) !important; border-color: var(--go) !important; font-weight: 600; color: #1e5c38; }
+  td.sync { background: #eef2f7 !important; }
+  td.sum { background: #e8eff7 !important; font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; margin: 14px 0 0; font-size: 14px; color: var(--muted); }
+  .legend i { display: inline-block; width: 14px; height: 14px; border-radius: 4px; margin-right: 6px; vertical-align: -2px; }
+  .note { background: #fff; border: 1px solid var(--line); border-left: 5px solid var(--b); border-radius: 10px; padding: 14px 18px; margin-top: 16px; }
+  .steps { counter-reset: s; list-style: none; padding: 0; margin: 10px 0 0; }
+  .steps li { position: relative; padding: 10px 0 10px 46px; border-bottom: 1px dashed var(--line); }
+  .steps li:last-child { border-bottom: none; }
+  .steps li::before {
+    counter-increment: s;
+    content: counter(s);
+    position: absolute; left: 0; top: 10px;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--a); color: #fff;
+    font-size: 14px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  code { background: #f1f3f6; border-radius: 4px; padding: 1px 5px; font-family: Consolas, monospace; font-size: 0.92em; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>多节点 D2D「1 对 1」：4 rank 执行顺序与 MPI 流程</h1>
+  <p class="sub">节点 A / B 各 2 个 GPU，<code>worldSize = 4</code>，每进程绑定 1 个 GPU。本轮只看一对：<b>A·GPU0（rank0）→ B·GPU0（rank2）</b>。全程只有 rank0 的 GPU 在做拷贝，rank1 / rank3 只出现在 MPI 集合操作上，rank2 只提供 dst 显存。</p>
+
+  <div class="card">
+    <p><b>测试用例：</b><code>multinode_device_to_device_write_sm</code>（<code>MultinodeDeviceToDeviceTransfer</code>，<code>AccessType::Write</code>）</p>
+    <p><b>测量语义：</b>一次 <code>doMemcpy</code> 只处理一个 <code>(src, dst)</code> 对；<code>PREFER_SRC_CONTEXT</code> 决定由 src 的 owner 发起写入。结果按对填入矩阵。</p>
+    <div class="params">
+      <span class="param">pair <b>(0 → 2)</b></span>
+      <span class="param">buffer <b>512 MiB</b></span>
+      <span class="param">loopCount <b>16</b></span>
+      <span class="param">averageLoopCount <b>3</b></span>
+      <span class="param">bandwidthValue <b>USE_FIRST_BW</b></span>
+      <span class="param">ctxPreference <b>PREFER_SRC_CONTEXT</b></span>
+      <span class="param">总对数 <b>12</b>（4×3）</span>
+    </div>
+  </div>
+
+  <h2>1. 角色映射（本轮 pair = 0 → 2）</h2>
+  <div class="nodes">
+    <div class="node a">
+      <h3>节点 A</h3>
+      <div class="chips">
+        <div class="chip active"><b>A · GPU0</b><span class="rk">rank 0 · src owner / 唯一执行 copy</span></div>
+        <div class="chip idle"><b>A · GPU1</b><span class="rk">rank 1 · 只参与 MPI 集合操作</span></div>
+      </div>
+    </div>
+    <div class="node b">
+      <h3>节点 B</h3>
+      <div class="chips">
+        <div class="chip target"><b>B · GPU0</b><span class="rk">rank 2 · dst owner / 只提供显存</span></div>
+        <div class="chip idle"><b>B · GPU1</b><span class="rk">rank 3 · 只参与 MPI 集合操作</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>2. 数据流：一条 A → B 的写入</h2>
+  <figure class="card">
+    <svg viewBox="0 0 1100 360" role="img" aria-label="A 节点 GPU0 向 B 节点 GPU0 单对写入的数据流图">
+      <defs>
+        <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+          <path d="M0,0 L9,4 L0,8 z" fill="#2f5d8a"></path>
+        </marker>
+      </defs>
+
+      <line x1="550" y1="30" x2="550" y2="330" stroke="#9aa0a6" stroke-width="1.5" stroke-dasharray="7 6"></line>
+      <text x="562" y="50" font-size="13" fill="#5f6368">节点边界 / fabric</text>
+
+      <rect x="20" y="30" width="400" height="300" rx="14" fill="#f7f9fc" stroke="#b9cde3" stroke-width="1.5"></rect>
+      <text x="42" y="58" font-size="15" font-weight="700" fill="#2f5d8a">节点 A · 源端</text>
+
+      <rect x="45" y="75" width="350" height="78" rx="10" fill="#e8eff7" stroke="#2f5d8a" stroke-width="2.5"></rect>
+      <text x="220" y="105" font-size="16" font-weight="700" fill="#1f3f5f" text-anchor="middle">A · GPU0（rank 0）</text>
+      <text x="220" y="128" font-size="12.5" fill="#41586e" text-anchor="middle">src unicast · 发起 SM copy（唯一执行者）</text>
+
+      <rect x="45" y="180" width="350" height="70" rx="10" fill="#f4f5f7" stroke="#c9ced6" stroke-width="1.5" stroke-dasharray="5 4"></rect>
+      <text x="220" y="208" font-size="14.5" fill="#7a808a" text-anchor="middle">A · GPU1（rank 1）</text>
+      <text x="220" y="230" font-size="12" fill="#9aa0a6" text-anchor="middle">无本地 buffer，只在 Barrier 上等待</text>
+
+      <rect x="680" y="30" width="400" height="300" rx="14" fill="#fdfaf6" stroke="#e6c8a8" stroke-width="1.5"></rect>
+      <text x="702" y="58" font-size="15" font-weight="700" fill="#b5651d">节点 B · 目的端</text>
+
+      <rect x="705" y="75" width="350" height="78" rx="10" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="2.5"></rect>
+      <text x="880" y="105" font-size="16" font-weight="700" fill="#1e5c38" text-anchor="middle">B · GPU0（rank 2）</text>
+      <text x="880" y="128" font-size="12.5" fill="#2f5d4a" text-anchor="middle">dst unicast · 只提供内存，不发起 copy</text>
+
+      <rect x="705" y="180" width="350" height="70" rx="10" fill="#f4f5f7" stroke="#c9ced6" stroke-width="1.5" stroke-dasharray="5 4"></rect>
+      <text x="880" y="208" font-size="14.5" fill="#7a808a" text-anchor="middle">B · GPU1（rank 3）</text>
+      <text x="880" y="230" font-size="12" fill="#9aa0a6" text-anchor="middle">无本地 buffer，只在 Barrier 上等待</text>
+
+      <path d="M 399 114 L 701 114" fill="none" stroke="#2f5d8a" stroke-width="4" marker-end="url(#arrow)"></path>
+      <text x="550" y="96" font-size="14" font-weight="700" fill="#2f5d8a" text-anchor="middle">1 条 A → B 写入</text>
+      <text x="550" y="150" font-size="12" fill="#5f6368" text-anchor="middle">rank0 启动 1 次 SM kernel，内部 16 轮 × 512 MiB</text>
+      <text x="550" y="170" font-size="12" fill="#5f6368" text-anchor="middle">写入 rank2 显存映射出来的远端 VA</text>
+
+      <text x="550" y="305" font-size="12.5" fill="#5f6368" text-anchor="middle">src / dst 都是 unicast 分配：owner 创建并导出，4 个 rank 全部映射，但只有 rank0 发起拷贝</text>
+    </svg>
+    <figcaption>数据只在 rank0 的 GPU 上流动：它的 SM 把数据写进“看起来很本地、实际落在 B·GPU0 显存”的远端地址。rank2 不参与搬运。</figcaption>
+  </figure>
+
+  <h2>3. MPI 时序图：4 个 rank 的同步点</h2>
+  <figure class="card">
+    <svg viewBox="0 0 1200 810" role="img" aria-label="4 个 rank 的 MPI 时序图">
+      <defs>
+        <marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+          <path d="M0,0 L8,3.5 L0,7 z" fill="#7b3fa0"></path>
+        </marker>
+        <marker id="ar2s" markerWidth="9" markerHeight="9" refX="1.5" refY="3.5" orient="auto">
+          <path d="M8,0 L0,3.5 L8,7 z" fill="#7b3fa0"></path>
+        </marker>
+      </defs>
+
+      <!-- 节点背景 -->
+      <rect x="95" y="20" width="400" height="770" rx="12" fill="#f7f9fc" stroke="#b9cde3" stroke-width="1.2"></rect>
+      <text x="115" y="42" font-size="13" font-weight="700" fill="#2f5d8a">节点 A</text>
+      <rect x="605" y="20" width="400" height="770" rx="12" fill="#fdfaf6" stroke="#e6c8a8" stroke-width="1.2"></rect>
+      <text x="625" y="42" font-size="13" font-weight="700" fill="#b5651d">节点 B</text>
+
+      <!-- 生命线 -->
+      <g stroke="#9aa0a6" stroke-width="1.4" stroke-dasharray="5 5">
+        <line x1="170" y1="78" x2="170" y2="775"></line>
+        <line x1="420" y1="78" x2="420" y2="775"></line>
+        <line x1="670" y1="78" x2="670" y2="775"></line>
+        <line x1="920" y1="78" x2="920" y2="775"></line>
+      </g>
+
+      <!-- rank 头 -->
+      <g text-anchor="middle">
+        <rect x="110" y="52" width="120" height="26" rx="6" fill="#e8eff7" stroke="#2f5d8a"></rect>
+        <text x="170" y="70" font-size="13" font-weight="700" fill="#1f3f5f">A·GPU0 · rank0</text>
+        <rect x="360" y="52" width="120" height="26" rx="6" fill="#f1f3f6" stroke="#c9ced6"></rect>
+        <text x="420" y="70" font-size="13" fill="#5f6368">A·GPU1 · rank1</text>
+        <rect x="610" y="52" width="120" height="26" rx="6" fill="#e6f4ea" stroke="#2e7d4f"></rect>
+        <text x="670" y="70" font-size="13" font-weight="700" fill="#1e5c38">B·GPU0 · rank2</text>
+        <rect x="860" y="52" width="120" height="26" rx="6" fill="#f1f3f6" stroke="#c9ced6"></rect>
+        <text x="920" y="70" font-size="13" fill="#5f6368">B·GPU1 · rank3</text>
+      </g>
+
+      <!-- 1 Allgather -->
+      <line x1="170" y1="112" x2="920" y2="112" stroke="#7b3fa0" stroke-width="2" marker-start="url(#ar2s)" marker-end="url(#ar2)"></line>
+      <text x="545" y="103" font-size="12.5" fill="#5b2c7a" text-anchor="middle">T0：MPI_Allgather ×2（hostname、deviceCount）→ localDevice = localRank % 2；此处没有 Barrier</text>
+
+      <!-- 2 闸门 Bcast -->
+      <line x1="170" y1="167" x2="920" y2="167" stroke="#7b3fa0" stroke-width="2" marker-end="url(#ar2)"></line>
+      <text x="545" y="158" font-size="12.5" fill="#5b2c7a" text-anchor="middle">T0b：只有 rank0 拥有这 4B → 导出 handle → MPI_Bcast（单点广播，非 Allgather）→ 各自 import / map</text>
+
+      <!-- Barrier 1 -->
+      <line x1="170" y1="212" x2="920" y2="212" stroke="#c0392b" stroke-width="2" stroke-dasharray="8 5"></line>
+      <text x="545" y="203" font-size="12.5" fill="#a93325" text-anchor="middle">MPI_Barrier（闸门映射完成，每用例仅一次）</text>
+
+      <!-- 3 pair Bcast -->
+      <line x1="170" y1="267" x2="920" y2="267" stroke="#7b3fa0" stroke-width="2" marker-end="url(#ar2)"></line>
+      <text x="545" y="258" font-size="12.5" fill="#5b2c7a" text-anchor="middle">T1a（循环之前，只一次）：rank0 生成并 shuffle 12 对 → MPI_Bcast(数量) → MPI_Bcast(数据)</text>
+
+      <!-- 4 src Bcast -->
+      <line x1="170" y1="320" x2="920" y2="320" stroke="#7b3fa0" stroke-width="2" marker-end="url(#ar2)"></line>
+      <text x="545" y="311" font-size="12.5" fill="#5b2c7a" text-anchor="middle">T2：src owner = rank0 → 导出 512 MiB handle → MPI_Bcast → 全部 import / map</text>
+
+      <!-- Barrier 2 -->
+      <line x1="170" y1="365" x2="920" y2="365" stroke="#c0392b" stroke-width="2" stroke-dasharray="8 5"></line>
+      <text x="545" y="356" font-size="12.5" fill="#a93325" text-anchor="middle">MPI_Barrier（src 映射完成）</text>
+
+      <!-- 5 dst Bcast -->
+      <line x1="670" y1="418" x2="170" y2="418" stroke="#7b3fa0" stroke-width="2" marker-end="url(#ar2)"></line>
+      <line x1="670" y1="418" x2="920" y2="418" stroke="#7b3fa0" stroke-width="2" marker-end="url(#ar2)"></line>
+      <text x="545" y="409" font-size="12.5" fill="#5b2c7a" text-anchor="middle">T3：dst owner = rank2 → 导出 512 MiB handle → MPI_Bcast → 全部 import / map</text>
+
+      <!-- Barrier 3 -->
+      <line x1="170" y1="463" x2="920" y2="463" stroke="#c0392b" stroke-width="2" stroke-dasharray="8 5"></line>
+      <text x="545" y="454" font-size="12.5" fill="#a93325" text-anchor="middle">MPI_Barrier（dst 映射完成）</text>
+
+      <!-- Barrier #1 -->
+      <line x1="170" y1="516" x2="920" y2="516" stroke="#c0392b" stroke-width="2" stroke-dasharray="8 5"></line>
+      <text x="545" y="507" font-size="12.5" fill="#a93325" text-anchor="middle">T6：采样起点 MPI_Barrier（×3 个采样，每轮一次）</text>
+
+      <!-- rank0 GPU 工作 -->
+      <rect x="128" y="540" width="84" height="62" rx="8" fill="#e6f4ea" stroke="#2e7d4f" stroke-width="2"></rect>
+      <text x="170" y="562" font-size="11.5" fill="#1e5c38" text-anchor="middle">GPU 工作</text>
+      <text x="170" y="579" font-size="11" fill="#1e5c38" text-anchor="middle">memset → spin</text>
+      <text x="170" y="594" font-size="11" fill="#1e5c38" text-anchor="middle">4 轮 + 16 轮</text>
+      <text x="545" y="565" font-size="12.5" fill="#41586e" text-anchor="middle">T7–T11：只有 rank0 入队并执行 GPU 工作；rank1 / rank2 / rank3 无 GPU 动作，直接走向下一个 Barrier</text>
+      <text x="545" y="584" font-size="12" fill="#5f6368" text-anchor="middle">（rank2 的显存被写，但它的 GPU 不参与；数据由 rank0 的 SM 跨 fabric 写入）</text>
+
+      <!-- Barrier #2 -->
+      <line x1="170" y1="635" x2="920" y2="635" stroke="#c0392b" stroke-width="2" stroke-dasharray="8 5"></line>
+      <text x="545" y="626" font-size="12.5" fill="#a93325" text-anchor="middle">T12：MPI_Barrier #2 —— 其余 3 个 rank 在这里等 rank0 的流结束</text>
+
+      <!-- 结果 Bcast -->
+      <line x1="170" y1="688" x2="920" y2="688" stroke="#7b3fa0" stroke-width="2" marker-end="url(#ar2)"></line>
+      <text x="545" y="679" font-size="12.5" fill="#5b2c7a" text-anchor="middle">T15：3 次采样结束 → rank0 作为 root MPI_Bcast 本对带宽</text>
+
+      <!-- 销毁 barriers -->
+      <line x1="170" y1="738" x2="920" y2="738" stroke="#c0392b" stroke-width="2" stroke-dasharray="8 5"></line>
+      <text x="545" y="729" font-size="12.5" fill="#a93325" text-anchor="middle">T16 / T17：销毁 dst、src，各一次 MPI_Barrier → unmap / release</text>
+
+      <!-- 循环体范围 -->
+      <path d="M 1030 302 L 1044 302 L 1044 750 L 1030 750" fill="none" stroke="#3a4a5e" stroke-width="2"></path>
+      <text x="1064" y="526" font-size="12.5" fill="#3a4a5e" text-anchor="middle" transform="rotate(90 1064 526)">循环体：T1b–T17 每个 pair 重复（共 12 对）</text>
+
+      <text x="600" y="782" font-size="12" fill="#5f6368" text-anchor="middle">紫色箭头 = Bcast（root 为 rank0 或 rank2）；红色虚线 = MPI_Barrier。rank1 / rank3 只在这些横线上出现。</text>
+    </svg>
+    <figcaption>纵向是时间。T0 / T0b / T1a 只在测试用例开始时执行一次；T1b–T17 是循环体，每个 pair 重复（共 12 对）。</figcaption>
+  </figure>
+
+  <h2>4. 一个 pair 的完整生命周期</h2>
+  <div class="card">
+    <ol class="steps">
+      <li><b>T0 启动，没有全局 Barrier</b>：<code>MPI_Init</code>、<code>MPI_Comm_rank/size</code>、<code>MPI_Allgather</code> 交换 hostname 和 deviceCount，<code>localDevice = localRank % 2</code>；随后各 rank 本地 <code>cudaSetDevice</code> + <code>cudaMalloc(1KB)</code> 健全性检查 + <code>preloadKernels</code>。这一步没有显式 Barrier，因为只需要交换元数据。</li>
+      <li><b>T0b 建共享闸门</b>：<code>new NodeHelperMulti()</code> 时 rank0 在 GPU 上 <code>cuMemCreate(4B)</code> 并导出 handle；因为只有 rank0 拥有这块内存，所以是 <b>rank0 单点广播</b>（不是 Allgather），4 个 rank 各自 import/map，最后 <code>MPI_Barrier</code>。这是整轮测试的第一次 device 空间申请。这块 4B 不存测试数据，它是 <b>spin kernel 的放行开关（latch）</b>：4 个 rank 映射的是同一份物理内存，master 往里写 1，各 GPU 上自旋等待的 kernel 看到后立即放行后续拷贝（见 T8）。</li>
+      <li><b>T1a 生成 / 广播 pair（循环之前，只一次）</b>：rank0 枚举 12 个有序对、采样、用固定种子 shuffle，然后两次 <code>MPI_Bcast</code>（数量 + 数据）；其他 rank 只接收并反序列化，所以 4 个 rank 的列表和顺序完全一致。</li>
+      <li><b>T1b 进入 for 循环</b>：每轮取出一个 pair，例如 <code>(0, 2)</code>，得到 <code>srcDeviceId = 0</code>、<code>peerDeviceId = 2</code>；从这里到 T17 都在循环体内，共重复 12 次。</li>
+      <li><b>T2 分配 src</b>：<code>MultinodeDeviceBufferUnicast(size, 0)</code>。rank0 <code>cuMemCreate</code> + export；<code>MPI_Bcast</code> handle；4 个 rank 都 reserve/map/setAccess；<code>MPI_Barrier</code>。</li>
+      <li><b>T3 分配 dst</b>：<code>MultinodeDeviceBufferUnicast(size, 2)</code>，owner 换成 rank2，其余流程相同。</li>
+      <li><b>T4 dispatch 过滤</b>：每 rank 都算出 <code>ranksUnfiltered = 0</code>（src owner），只有 rank0 满足 <code>== worldRank</code>，保留 1 对；其余为 0 对。</li>
+      <li><b>T5–T14 采样 ×3</b>：Barrier → memset → 入队 spin → 预热 4 轮 → 计时 16 轮 → release → 等待流 → Barrier → 校验 → 统计。只有 rank0 有 GPU 动作，其余 rank 在第二个 Barrier 上等待。</li>
+      <li><b>T15 取结果</b>：<code>calculateFirstBandwidth()</code> 由 rank0 做 root <code>MPI_Bcast</code>。</li>
+      <li><b>T16–T17 销毁</b>：dst、src 各一次 <code>MPI_Barrier</code> + unmap/release/free，然后进入下一个 pair。</li>
+    </ol>
+    <div class="note">
+      分配和销毁都在“每个 pair”这一层，3 次采样复用同一对 buffer；不是每次采样重新申请。
+    </div>
+  </div>
+
+  <h2>5. 时间线：纵轴时间，横轴 4 个 rank（pair = 0 → 2）</h2>
+  <div class="card">
+    <p class="sub" style="margin-top:0">阶段列同时标注该步的 MPI 操作；格子里的文字是该 rank 真正执行的动作。</p>
+    <div class="tl-wrap">
+      <table class="tl">
+        <thead>
+          <tr>
+            <th class="stage">阶段（时间 ↓）</th>
+            <th class="s0">A · GPU0<br>rank 0</th>
+            <th>A · GPU1<br>rank 1</th>
+            <th class="s2">B · GPU0<br>rank 2</th>
+            <th>B · GPU1<br>rank 3</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="stage"><b>T0 启动与设备绑定</b><span>MultiNodeEnv::initialize / printGPUsMultinode</span><em class="tag mpi">MPI: Allgather ×2，无 Barrier</em></td>
+            <td class="sync">MPI_Init / Comm_rank / Comm_size<br>Allgather hostname + deviceCount<br>localDevice = 0<br>cudaSetDevice(0) + cudaMalloc(1KB) / free<br>preloadKernels</td>
+            <td class="sync">同上<br>localDevice = 1<br>cudaSetDevice(1)</td>
+            <td class="sync">同上<br>localDevice = 0（本节点）<br>cudaSetDevice(0)</td>
+            <td class="sync">同上<br>localDevice = 1<br>cudaSetDevice(1)</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T0b 建共享闸门（每用例一次）</b><span>NodeHelperMulti 构造 / MultinodeMemoryAllocationUnicast(4B, 0)</span><em class="tag mpi">MPI: Bcast handle + Barrier</em></td>
+            <td class="act">cuMemCreate(4B)<br>cuMemExportToShareableHandle(FABRIC)<br>MPI_Bcast(handle)（root）<br>reserve → map → setAccess<br>MPI_Barrier</td>
+            <td class="sync">MPI_Bcast 收 handle<br>import → map → setAccess<br>MPI_Barrier</td>
+            <td class="sync">MPI_Bcast 收 handle<br>import → map → setAccess<br>MPI_Barrier</td>
+            <td class="sync">MPI_Bcast 收 handle<br>import → map → setAccess<br>MPI_Barrier</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T1a 生成 / 广播 pair 列表</b><span>generateTestPairs(worldSize, targetNumPairs)，在 for 循环之前</span><em class="tag mpi">MPI: Bcast ×2（数量、数据）</em> <em class="tag loc">循环外，只一次</em></td>
+            <td class="act">枚举 12 个有序对<br>（可选采样）shuffle(seed = 0xBAADF00D)<br>MPI_Bcast 数量<br>MPI_Bcast 数据</td>
+            <td class="sync">MPI_Bcast 接收 ×2<br>反序列化成 12 对</td>
+            <td class="sync">MPI_Bcast 接收 ×2<br>反序列化成 12 对</td>
+            <td class="sync">MPI_Bcast 接收 ×2<br>反序列化成 12 对</td>
+          </tr>
+          <tr>
+            <td colspan="5" class="loopbar">▼ 以下 T1b – T17 是 pair 循环体，每个 pair 执行一遍（共 12 对）；T0 / T0b / T1a 只在测试用例开始时执行一次</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T1b 进入 for 循环，取当前 pair</b><span>for (const auto&amp; pair : pairs)</span><em class="tag loc">循环内 ×12</em></td>
+            <td class="act">取到 pair (0, 2)<br>srcDeviceId = 0<br>peerDeviceId = 2</td>
+            <td class="sync">取到同一对 (0, 2)</td>
+            <td class="sync">取到同一对 (0, 2)</td>
+            <td class="sync">取到同一对 (0, 2)</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T2 分配 src unicast</b><span>MultinodeDeviceBufferUnicast(size, 0)</span><em class="tag mpi">MPI: Bcast handle + Barrier</em></td>
+            <td class="act">cuMemCreate(512 MiB)<br>cuMemExportToShareableHandle<br>MPI_Bcast(handle)（root）<br>reserve → map<br>setAccess(RW)<br>MPI_Barrier</td>
+            <td class="sync">MPI_Bcast 收 handle<br>import → reserve → map<br>setAccess(RW)<br>MPI_Barrier</td>
+            <td class="sync">MPI_Bcast 收 handle<br>import → reserve → map<br>setAccess(RW)<br>MPI_Barrier</td>
+            <td class="sync">MPI_Bcast 收 handle<br>import → reserve → map<br>setAccess(RW)<br>MPI_Barrier</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T3 分配 dst unicast</b><span>MultinodeDeviceBufferUnicast(size, 2)</span><em class="tag mpi">MPI: Bcast handle + Barrier</em></td>
+            <td class="sync">MPI_Bcast 收 handle<br>import → map → setAccess<br>MPI_Barrier</td>
+            <td class="sync">MPI_Bcast 收 handle<br>import → map → setAccess<br>MPI_Barrier</td>
+            <td class="act">cuMemCreate(512 MiB)<br>cuMemExportToShareableHandle<br>MPI_Bcast(handle)（root）<br>reserve → map<br>setAccess(RW)<br>MPI_Barrier</td>
+            <td class="sync">MPI_Bcast 收 handle<br>import → map → setAccess<br>MPI_Barrier</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T4 dispatch 过滤</b><span>NodeHelperMulti::dispatchMemcpy</span><em class="tag loc">本地判断，无 MPI</em></td>
+            <td class="act">保留 1 对<br>ctx = A·GPU0 primary ctx<br>rankOfFirstMemcpy = 0</td>
+            <td class="idle">0 对<br>列表为空</td>
+            <td class="idle">0 对<br>ranksUnfiltered = 0 ≠ 2</td>
+            <td class="idle">0 对<br>列表为空</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T5 建流 / 事件</b><span>doMemcpyCore 入口</span><em class="tag loc">本地，无 MPI</em></td>
+            <td class="act">cuStreamCreate(NON_BLOCKING)<br>cuEventCreate(start / end)<br>getAdjustedCopySize(512 MiB)</td>
+            <td class="sync">只建 totalEnd 事件<br>（无本地 buffer）</td>
+            <td class="sync">只建 totalEnd 事件</td>
+            <td class="sync">只建 totalEnd 事件</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T6 采样起点</b><span>streamBlockerReset → synchronizeProcess</span><em class="tag mpi">MPI: Barrier #1（共 3 次）</em></td>
+            <td class="sync">host latch = 0<br>cuMemsetD32(共享 latch, 0)<br>MPI_Barrier</td>
+            <td class="sync">cuMemsetD32(共享 latch, 0)<br>MPI_Barrier</td>
+            <td class="sync">cuMemsetD32(共享 latch, 0)<br>MPI_Barrier</td>
+            <td class="sync">cuMemsetD32(共享 latch, 0)<br>MPI_Barrier</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T7 填充校验 pattern</b><span>MemcpyInitiatorSM::memsetPattern</span><em class="tag gpu">GPU，仅 rank0</em></td>
+            <td class="act">远端 dst 写 0xCAFEBABE<br>本地 src 写 0xBAADF00D<br>各 512 MiB，同步本地流</td>
+            <td class="idle">无 buffer，跳过</td>
+            <td class="idle">跳过<br>（显存由 rank0 写）</td>
+            <td class="idle">跳过</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T8 入队 spin 闸门</b><span>streamBlockerBlock → spinKernelMultistage</span><em class="tag gpu">GPU，仅 rank0</em></td>
+            <td class="wait">入队 spin kernel（master）<br>只有它持有 host latch</td>
+            <td class="idle">无流，未入队</td>
+            <td class="idle">未入队</td>
+            <td class="idle">未入队</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T9 入队预热拷贝</b><span>copyKernel(loopCount = 4)</span><em class="tag gpu">GPU，仅 rank0</em></td>
+            <td class="act">stridingMemcpyKernel 入队<br>1 次启动，内部 4 轮</td>
+            <td class="idle">空闲</td>
+            <td class="idle">空闲</td>
+            <td class="idle">空闲</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T10 入队计时命令</b><span>cuEventRecord(start) → copyKernel(16) → cuEventRecord(end)</span><em class="tag gpu">GPU，仅 rank0</em></td>
+            <td class="act">start event<br>stridingMemcpyKernel 入队（16 轮）<br>end event</td>
+            <td class="idle">空闲</td>
+            <td class="idle">空闲</td>
+            <td class="idle">空闲</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T11 放行 + 等流</b><span>streamBlockerRelease → cuStreamQuery</span><em class="tag loc">rank0 等 GPU；其他 rank 直接去 Barrier</em></td>
+            <td class="act">host latch = 1<br>循环 cuStreamQuery + MPI_Iprobe<br>直到 16 轮拷贝完成</td>
+            <td class="sync">不建流，直接进入 T12</td>
+            <td class="sync">直接进入 T12</td>
+            <td class="sync">直接进入 T12</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T12 采样结束 Barrier</b><span>synchronizeProcess</span><em class="tag mpi">MPI: Barrier #2（共 3 次）</em></td>
+            <td class="sync">MPI_Barrier<br>（拷贝完成后才到）</td>
+            <td class="sync">MPI_Barrier<br>在这里等 rank0</td>
+            <td class="sync">MPI_Barrier<br>在这里等 rank0</td>
+            <td class="sync">MPI_Barrier<br>在这里等 rank0</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T13 校验</b><span>MemcpyInitiatorSM::memcmpPattern</span><em class="tag gpu">GPU，仅 rank0</em></td>
+            <td class="act">回读远端 dst<br>比对 0xBAADF00D<br>不一致则报错</td>
+            <td class="idle">跳过</td>
+            <td class="idle">跳过</td>
+            <td class="idle">跳过</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T14 本次采样统计</b><span>cuEventElapsedTime + PerformanceStatistic</span><em class="tag loc">本地计算</em></td>
+            <td class="act">elapsed = start → end<br>BW = adjustedCopySize × 16 / elapsed</td>
+            <td class="idle">无统计</td>
+            <td class="idle">无统计</td>
+            <td class="idle">无统计</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T15 结果广播</b><span>calculateFirstBandwidth</span><em class="tag mpi">MPI: Bcast（root = rank0）</em></td>
+            <td class="sum">root = rankOfFirstMemcpy = 0<br>MPI_Bcast 本对带宽</td>
+            <td class="sum">接收</td>
+            <td class="sum">接收<br>写入矩阵 (0, 2)</td>
+            <td class="sum">接收</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T16 销毁 dst</b><span>~MultinodeMemoryAllocationUnicast</span><em class="tag mpi">MPI: Barrier → unmap / release</em></td>
+            <td class="sync">MPI_Barrier<br>unmap / release / addressFree</td>
+            <td class="sync">同上</td>
+            <td class="actdst">MPI_Barrier<br>unmap + 释放自己创建的 handle</td>
+            <td class="sync">同上</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T17 销毁 src</b><span>~MultinodeMemoryAllocationUnicast</span><em class="tag mpi">MPI: Barrier → unmap / release</em></td>
+            <td class="act">MPI_Barrier<br>unmap + 释放自己创建的 handle</td>
+            <td class="sync">同上</td>
+            <td class="sync">同上</td>
+            <td class="sync">同上</td>
+          </tr>
+          <tr>
+            <td colspan="5" class="loopbar">▲ 循环体结束：T18 取下一个 pair，回到 T1b，T2 – T17 重新执行；12 对全部跑完后才输出结果</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T18 下一个 pair</b><span>回到 T1b 的 for 循环</span><em class="tag loc">循环内 ×12</em></td>
+            <td class="idle">取下一对<br>（顺序已在 T1a 广播）</td>
+            <td class="idle">取下一对</td>
+            <td class="idle">取下一对</td>
+            <td class="idle">取下一对</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <span><i style="background:#e8eff7;border:1px solid #b9cde3"></i>rank0 动作</span>
+      <span><i style="background:#e6f4ea;border:1px solid #2e7d4f"></i>rank2 动作 / 计时窗口</span>
+      <span><i style="background:#eef2f7;border:1px solid #dfe3e8"></i>参与 Bcast / Barrier / 映射</span>
+      <span><i style="background:#fff8e1;border:1px solid #d9b64a"></i>自旋 / 闸门</span>
+      <span><i style="background:#f4f5f7;border:1px solid #dfe3e8"></i>无本地工作</span>
+    </div>
+    <p class="sub" style="margin-top:14px;margin-bottom:0">T0 / T0b / T1a 在测试用例开始时只做一次；T1b–T18 是 pair 循环体（12 对）；T6–T14 是循环体内的采样周期（3 次）。</p>
+  </div>
+
+  <h2>6. 关键点</h2>
+  <div class="card">
+    <p><b>T0 为什么没有 Barrier：</b>启动阶段各 rank 只需要交换 hostname 和 deviceCount（两次 <code>MPI_Allgather</code>），之后全是本地动作（<code>cudaSetDevice</code>、1KB 健全性分配、<code>preloadKernels</code>）。真正的设备空间申请和第一次全局同步发生在 T0b：<code>NodeHelperMulti</code> 在 rank0 上创建 4 字节共享闸门，<code>MPI_Bcast</code> handle 后由全部 rank 映射，末尾 <code>MPI_Barrier</code>。</p>
+    <p><b>为什么只有 rank0 忙：</b><code>PREFER_SRC_CONTEXT</code> 让 <code>dispatchMemcpy</code> 取 src 的 owner（0），再用 <code>ranksUnfiltered == worldRank</code> 过滤，所以只有 rank0 的待执行列表非空。rank2 只提供 dst 显存，rank1 / rank3 只参与集合操作。</p>
+    <p><b>ctxPreference 到底决定什么：</b>回答「这一路拷贝以谁的名义发起、在哪个 GPU 上跑」——写场景用 <code>PREFER_SRC_CONTEXT</code>，拷贝在<b>源 GPU 上下文</b>里执行，测「源端的写出能力」；读场景用 <code>PREFER_DST_CONTEXT</code>，拷贝在<b>目的 GPU 上下文</b>里执行，测「目的端的读入能力」（所以 Read 要把实参对调：让落点那侧的 GPU 亲自从远端拉数据）。dispatchInfo 按作用装 4 样东西：① <b>「我这台进程要干的活」清单</b>——每路 = 源指针 + 目的指针 + 在哪个 GPU 上下文跑；pair (0,2) 下 rank0 拿到 1 路（源 = 本地 VA、目的 = import 的远端 VA），rank1/2/3 拿到空清单，core 里所有「对每路循环」自动空转——这就是空闲 rank 的机械实现；② <b>全量拷贝清单</b>（不过滤，供结果对位置）；③ <b>每路执行者的 rank 编号</b>——用来挑 spin 闸门 master、以及结果聚合时当 Bcast root（谁测的谁广播）；④ <b>空白工作区</b>——core 后续填每路的流 / 截断后字节数 / 循环次数。对照 bisect（VECTOR_BW）：4 路、执行者 0/1/2/3 各 1 路，谁都不空转，聚合时按执行者逐路 Bcast 拼回完整结果。</p>
+    <p><b>空闲 rank 具体在等哪里：</b>它们完整跑完 <code>doMemcpyCore</code>，但本地 buffer 数为 0，memset / kernel / event / 统计全部空转；<code>streamBlockerReset</code> 里的 <code>cuMemsetD32</code> 会写共享闸门（唯一碰 GPU 的动作）。真正的等待点是 T12 的 <code>MPI_Barrier</code>：rank0 完成 16 轮拷贝后才到达。</p>
+    <p><b>dispatchMemcpy 逐步走（pair (0,2)、Write）：</b>4 个 rank <b>都执行</b>这个函数且函数内<b>一行 MPI 都没有</b>——各 rank 的 buffer 对象是同构副本（owner 元数据构造时已烙进），同样规则各自算、结论必然一致，分活不需要通信。第一步「标注」：Write 下执行者 = src 的 owner = 0（4 个 rank 算出同样的 {0}），但记下的 ctx 是<b>本进程自己的 GPU</b>（getPrimaryCtx 永远返回调用者 localDevice 的 ctx：rank0 记 A·GPU0、rank1 记 A·GPU1、rank2 记 B·GPU0、rank3 记 B·GPU1）。第二步「认领」：<code>== worldRank</code> 只有 rank0 保留这一路（源指针 + 目的指针 + A·GPU0 ctx），其余 3 个 rank 得空清单——core 里所有「对每路循环」零次迭代，自动空转。第三步「记 master」：<code>rankOfFirstMemcpy = 0</code> 在<b>全员</b>身上设置（不是只有 rank0），后续 spin 闸门 master 和结果 Bcast root 都靠它，全员记同一个值集合操作才对得上。Read 方向对照：实参对调 + PREFER_DST → 看 dst（= srcNode）的 owner = 0，执行者还是 rank0 但方向相反；N 路场景（bisect 4 路 / AllToOne 3 路）同一套两步走，每个 rank 恰好认领自己那些路。</p>
+    <p><b>dispatchMemcpy 代码级细节：</b>① <code>ranksUnfiltered</code> 初始值 -1 是哨兵——没被标注执行者的路在认领循环里 <code>-1 == worldRank</code> 永不成立，自动静默丢弃，无需专门清理；② 标注循环的 <code>else if</code> 不检查 <code>PREFER_DST_CONTEXT</code>，它是兜底分支：PREFER_SRC 是「偏好」不是「强制」，src 侧没有设备上下文（host 类 buffer）时回退到 dst 侧；PREFER_DST 则没有回退到 src 的路径（不对称）。D2D 的设备 buffer ctx 恒非空，此分支从不触发；③ <code>rankOfFirstMemcpy</code> 取自<b>未过滤</b>表的首元素且是 NodeHelperMulti 成员变量——全员记同一个值、跨整个 doMemcpyCore 存活，spin master（streamBlockerBlock）和结果 Bcast root（calculateFirstBandwidth）都从它取；④ 空表守卫（<code>size() &gt; 0</code>）避免 <code>[0]</code> 越界。</p>
+    <p><b>MPI 在每个 pair 里的固定开销：</b>2 次 Bcast（src/dst handle）+ 2 次 Barrier（映射完成）+ 6 次 Barrier（3 次采样 × 2）+ 1 次 Bcast（结果）+ 2 次 Barrier（析构）。这就是 1 对 1 用例在 4 rank 下看起来“同步很多”的原因。</p>
+    <p><b>为什么不是每个 rank 都 cuMemCreate：</b>unicast buffer 的语义是“一份物理显存 + 多进程映射”。owner 由构造参数 <code>MPI_rank</code> 决定（src buffer 是 <code>srcDeviceId</code>，dst buffer 是 <code>peerDeviceId</code>），所以 <code>if (MPI_rank == worldRank)</code> 只有 owner 成立：只有它 <code>cuMemCreate</code> / export，其余 rank import 同一个 fabric handle 再映射。如果每个 rank 都自己 create，就会得到 4 块不同的显存，拷贝目标就错了。注意只是“每块 buffer 一个 owner”，12 个 pair 跑下来每个 rank 都会轮到当 owner。</p>
+    <p><b>src（pair.first）的导出 / 广播确实没有必要——这是代码的统一写法，不是功能需要：</b>本用例里 pair.first 的 buffer 只有它的 owner 自己会碰：Write 方向执行者就是 src owner（读自己的 src、写远端 dst）；Read 方向（同一个类，<code>doMemcpy(peerNode, srcNode)</code> 实参对调 + <code>PREFER_DST_CONTEXT</code>，见 <code>multinode_testcases.cpp</code> L63-66）执行者仍是 rank0，读远端 peerNode、写自己的 buffer。两个方向都只有 <b>pair.second（peerNode）</b>需要跨进程映射。代码库有对应的本地分配类 <code>MultinodeDeviceBufferLocal</code>（owner <code>cuMemAlloc</code>，不 export / 不广播），且在方向固定的用例里正是这么用的：AllToOneWrite 的 3 个 src 全是 Local、只有 dst 是 Unicast；AllFromOneRead 正好反过来。D2D 因为一个 <code>run()</code> 体同时服务 Read / Write 两个方向（唯一区别是实参对调），两边就统一都用了 Unicast——pair.first 的 export + Bcast + import + map 是纯开销（每 pair 一次，全在计时窗口外）。</p>
+    <p><b>MPI_Bcast 不是 Barrier：</b>它是集合操作，4 个 rank 都调用同一个函数，root 发送、其余接收；接收方会阻塞到数据到达，所以有“数据对齐”的效果，但它不保证所有 rank 都已到达同一点（root 可能先返回）。因此代码在映射完成后另外调用 <code>MPI_Barrier</code>。T0b 的闸门只有 rank0 拥有，是单点 Bcast，不是 Allgather；每个 rank 拿到的是同一份 handle。</p>
+    <p><b>T1a 里那个多出来的 Barrier（<code>generateTestPairs</code> 内部）：</b>该函数被每个 D2D 系用例反复调用（D2D + bidir 各方向变体），内部用函数级 static 缓存 + <code>pairsCalculated</code> 标志实现「只算一次」：第一次调用全员跌落，rank0 生成、<code>MPI_Barrier</code>、<b>所有 rank</b> 置位标志、两次 Bcast、非 root 反序列化填充自己的缓存副本；之后的调用所有 rank 同时满足早退条件、纯本地返回缓存，连 Bcast 都不再发。关键行是「全员置位标志」——若只对 rank0 置位，第二次调用 rank0 早退不进 Bcast、其他 rank 卡在 Bcast 等一个永不到来的 root，直接死锁。Barrier 本身的作用是把标志翻转对齐到「rank0 已生成完毕」之后；单看第一次调用，后面的 Bcast 也会让非 root 等到 root，所以它偏防御式显式对齐。</p>
+    <p><b>下一个 pair (1, 3) 的完整角色重分配：</b>没有角色切换代码，一切由当前 pair 的 src rank 数据驱动。回到 T1b 取出 <code>(1, 3)</code>：src = A·GPU1（rank1）、dst = B·GPU1（rank3）。T2 的 owner 换成 rank1（rank1 <code>cuMemCreate</code> + export，<code>MPI_Bcast</code> root = 1，其余 3 个 rank import / map）；T3 的 owner 换成 rank3（root = 3）；T4 算出 <code>ranksUnfiltered = 1</code>，rank1 成为唯一执行者兼 master（<code>rankOfFirstMemcpy = 1</code>）；T7 的 memset、T13 的 memcmp、T15 结果 <code>MPI_Bcast</code> 的 root 全部换成 rank1；上一对的 rank0 / rank2 退化为只在映射和集合操作中出现，在 T12 的 Barrier 上等待。T16 / T17 析构后取第 3 个 pair，依此类推跑完 12 对。逐步时间线见第 8 节。</p>
+    <p><b>“同时”不适用于这里：</b>1 对 1 一次只搬运一个 pair；多打一才是 3 个源 rank 并发写同一个目标。</p>
+    <p><b>doMemcpyCore 里一行 MPI 都没有：</b>这是设计使然——MPI 全部藏在 <code>nodeHelper</code> 接口后面，core 只调接口：<code>synchronizeProcess()</code> 在 NodeHelperMulti 里是 <code>MPI_Barrier</code>（T6 / T12），<code>streamBlockerReset / Block / Release</code> 是 4B 闸门 + spin kernel（T6 / T8 / T11），<code>streamSynchronizeWrapper</code> 是 <code>cuStreamQuery</code> 轮询 + <code>MPI_Iprobe</code> 保活（T11），<code>calculateFirstBandwidth</code> 等是 <code>MPI_Bcast / Allreduce</code>（T15）。单节点跑 NodeHelperSingle（同步是空操作、blocker 是本地内存），多节点跑 NodeHelperMulti，core 一行不改。</p>
+    <div class="note">
+      <b>计时口径：</b>只覆盖 T10 那次 kernel 的 16 轮拷贝。T7 的 memset 和 T9 的预热（同一次 kernel 启动、内部 4 轮）都不进计时窗口。SM 打流不是 <code>cudaMemcpy</code>：一次 <code>stridingMemcpyKernel</code> 启动、16 轮在 kernel 内部循环，start / end 事件测的是 GPU 上的真实执行窗口。<b>闸门管「起跑」，不管「终点」</b>——T8 的 spin kernel 挡在流最前面，放行后预热、事件、拷贝在 GPU 侧连续执行，host 入队抖动被挡在窗口外；结束判定靠 <code>cuStreamQuery</code> 轮询 + end event，不靠闸门。
+    </div>
+  </div>
+
+  <h2>7. 结果如何得到</h2>
+  <div class="card">
+    <p>rank0 用自己流的 <code>start / end</code> 事件算出本对带宽：<code>adjustedCopySize × loopCount / elapsed</code>；<code>adjustedCopySize</code> 会按 SM 线程数向下截断到 16 字节倍数。</p>
+    <p>3 次采样取统计值后，<code>calculateFirstBandwidth()</code> 以 rank0 为 root 做 <code>MPI_Bcast</code>，4 个 rank 拿到同一个标量；结果写入 <code>PeerValueMatrix</code> 的 <code>(0, 2)</code> 位置。</p>
+    <p>输出标签为 <code>memcpy SM GPU(row) &lt;- GPU(column) bandwidth (GB/s)</code>，只有 rank0 打印。之后继续下一个 pair，直到 12 对跑完。</p>
+  </div>
+
+  <h2>8. 下一个 pair (1, 3)：角色重分配的完整时间线</h2>
+  <div class="card">
+    <p class="sub" style="margin-top:0">回到 T1b 取出第 2 个 pair：src = A·GPU1（rank1）、dst = B·GPU1（rank3）。<b>没有任何角色切换代码</b>——owner、Bcast root、master、memset / memcmp 执行者全部由当前 pair 的 src rank 数据驱动；上一对的 rank0 / rank2 自动退化为空闲。T0 / T0b / T1a 不会重跑：4B 闸门随 <code>MemcpyOperation</code>（含 <code>NodeHelperMulti</code>）在 <code>run()</code> 开头构造一次，12 对共用。</p>
+    <div class="tl-wrap">
+      <table class="tl">
+        <thead>
+          <tr>
+            <th class="stage">阶段（时间 ↓）</th>
+            <th>A · GPU0<br>rank 0<br>（上对执行者 → 本对空闲）</th>
+            <th class="s0">A · GPU1<br>rank 1<br>（本对执行者 + master）</th>
+            <th>B · GPU0<br>rank 2<br>（上对 dst owner → 本对空闲）</th>
+            <th class="s2">B · GPU1<br>rank 3<br>（本对 dst owner）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="stage"><b>T1b 取 pair (1, 3)</b><span>for 循环第 2 轮</span><em class="tag loc">循环内</em></td>
+            <td class="sync">从同一份列表取出 (1, 3)</td>
+            <td class="act">srcDeviceId = 1</td>
+            <td class="sync">从同一份列表取出 (1, 3)</td>
+            <td class="actdst">peerDeviceId = 3</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T2 分配 src</b><span>MultinodeDeviceBufferUnicast(512MiB, 1) / Bcast root = 1</span><em class="tag mpi">MPI: Bcast + Barrier</em></td>
+            <td class="sync">Bcast 收 handle<br>import → map → setAccess<br>（本对不解引用，T17 统一拆）<br>MPI_Barrier</td>
+            <td class="act">cuMemCreate(512MiB, A·GPU1)<br>cuMemExportToShareableHandle<br>MPI_Bcast(handle)（root）<br>reserve → map → setAccess<br>MPI_Barrier</td>
+            <td class="sync">Bcast 收 handle<br>import → map → setAccess<br>（本对不解引用）<br>MPI_Barrier</td>
+            <td class="sync">Bcast 收 handle<br>import → map → setAccess<br>（本对不解引用）<br>MPI_Barrier</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T3 分配 dst</b><span>MultinodeDeviceBufferUnicast(512MiB, 3) / Bcast root = 3</span><em class="tag mpi">MPI: Bcast + Barrier</em></td>
+            <td class="sync">Bcast 收 handle<br>import → map → setAccess<br>（本对不解引用，T16 统一拆）<br>MPI_Barrier</td>
+            <td class="act">Bcast 收 handle<br>import → map → setAccess<br>（执行者要写 dst，<b>真正用到</b>）<br>MPI_Barrier</td>
+            <td class="sync">Bcast 收 handle<br>import → map → setAccess<br>（本对不解引用）<br>MPI_Barrier</td>
+            <td class="actdst">cuMemCreate(512MiB, B·GPU1)<br>cuMemExportToShareableHandle<br>MPI_Bcast(handle)（root）<br>reserve → map → setAccess<br>MPI_Barrier</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T4 dispatch 过滤</b><span>NodeHelperMulti::dispatchMemcpy</span><em class="tag loc">本地判断</em></td>
+            <td class="idle">ranksUnfiltered = {1} ≠ 0<br>得到空列表，无 GPU 动作</td>
+            <td class="act">ranksUnfiltered = {1} == worldRank<br>保留 1 对 buffer<br>rankOfFirstMemcpy = 1（<b>master 换人</b>）</td>
+            <td class="idle">ranksUnfiltered = {1} ≠ 2<br>得到空列表</td>
+            <td class="idle">ranksUnfiltered = {1} ≠ 3<br>得到空列表</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T5 建流 / 事件</b><span>doMemcpyCore</span><em class="tag loc">本地</em></td>
+            <td class="idle">无</td>
+            <td class="act">cuStreamCreate ×1<br>start / end 事件 ×1</td>
+            <td class="idle">无</td>
+            <td class="idle">无</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T6 采样起点 Barrier#1</b><span>streamBlockerReset + synchronizeProcess ×3 轮</span><em class="tag mpi">MPI: Barrier</em></td>
+            <td class="sync">cuMemsetD32 清共享闸门 = 0<br>MPI_Barrier</td>
+            <td class="act">cuMemsetD32 清共享闸门 = 0<br>MPI_Barrier</td>
+            <td class="sync">cuMemsetD32 清共享闸门 = 0<br>MPI_Barrier</td>
+            <td class="sync">cuMemsetD32 清共享闸门 = 0<br>MPI_Barrier</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T7 填充校验 pattern</b><span>memsetPattern（仅 rank1）</span><em class="tag gpu">GPU，仅 rank1</em></td>
+            <td class="idle">空转（buffer 数 = 0）</td>
+            <td class="act">dst（import 映射）写 0xCAFEBABE<br>src（本地映射）写 0xBAADF00D</td>
+            <td class="idle">空转</td>
+            <td class="idle">空转</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T8 入队 spin 闸门</b><span>streamBlockerBlock → spinKernelMultistage</span><em class="tag gpu">GPU，仅 rank1</em></td>
+            <td class="idle">无流，不入队</td>
+            <td class="wait">入队 spin kernel（master）<br>只有它等 host latch</td>
+            <td class="idle">无流，不入队</td>
+            <td class="idle">无流，不入队</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T9 + T10 预热 + 计时入队</b><span>warmup kernel（内部 4 轮）+ stridingMemcpyKernel（内部 16 轮，start / end 事件夹住）</span><em class="tag gpu">GPU，仅 rank1</em></td>
+            <td class="idle">无</td>
+            <td class="act">入队 A·GPU1 → B·GPU1<br>SM 拷贝 kernel ×2 次启动</td>
+            <td class="idle">无</td>
+            <td class="idle">无</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T11 放行 + 等流</b><span>streamBlockerRelease + cuStreamQuery 轮询</span><em class="tag loc">本地</em></td>
+            <td class="idle">无</td>
+            <td class="act">*blockingVarHost = 1 → 放行<br>cuStreamQuery 轮询至流空</td>
+            <td class="idle">无</td>
+            <td class="idle">无</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T12 Barrier#2</b><span>synchronizeProcess</span><em class="tag mpi">MPI: Barrier</em></td>
+            <td class="sync">MPI_Barrier（<b>真正等待点</b>）</td>
+            <td class="act">MPI_Barrier（拷贝完才到）</td>
+            <td class="sync">MPI_Barrier（<b>真正等待点</b>）</td>
+            <td class="sync">MPI_Barrier（<b>真正等待点</b>）</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T13 校验 / T14 统计</b><span>memcmpPattern + cuEventElapsedTime（仅 rank1）</span><em class="tag gpu">GPU，仅 rank1</em></td>
+            <td class="idle">空转</td>
+            <td class="act">回读 dst 比对 0xBAADF00D<br>start / end 事件算带宽 ×3 采样</td>
+            <td class="idle">空转</td>
+            <td class="idle">空转</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T15 结果 Bcast</b><span>calculateFirstBandwidth / root = rank1</span><em class="tag mpi">MPI: Bcast</em></td>
+            <td class="sync">MPI_Bcast 接收</td>
+            <td class="act">MPI_Bcast（root）<br>写入矩阵 (1, 3)</td>
+            <td class="sync">MPI_Bcast 接收</td>
+            <td class="sync">MPI_Bcast 接收</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T16 销毁 dst</b><span>~MultinodeMemoryAllocationUnicast（owner = rank3）</span><em class="tag mpi">MPI: Barrier</em></td>
+            <td class="sync">MPI_Barrier → unmap / release / free</td>
+            <td class="act">MPI_Barrier → unmap / release / free</td>
+            <td class="sync">MPI_Barrier → unmap / release / free</td>
+            <td class="actdst">MPI_Barrier → unmap / release / free</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T17 销毁 src</b><span>~MultinodeMemoryAllocationUnicast（owner = rank1）</span><em class="tag mpi">MPI: Barrier</em></td>
+            <td class="sync">MPI_Barrier → unmap / release / free</td>
+            <td class="act">MPI_Barrier → unmap / release / free</td>
+            <td class="sync">MPI_Barrier → unmap / release / free</td>
+            <td class="sync">MPI_Barrier → unmap / release / free</td>
+          </tr>
+          <tr>
+            <td class="stage"><b>T18 下一个 pair</b><span>回到 T1b</span><em class="tag loc">循环内</em></td>
+            <td colspan="4" class="loopbar">取第 3 个 pair，角色再次随 src rank 重分配；12 对全部跑完后输出矩阵</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:16px"><b>与 pair (0, 2) 相比，变的只有这五处：</b></p>
+    <ol class="steps" style="margin-top:8px">
+      <li><b>T2 的 owner 和 Bcast root</b>：rank1（原来是 rank0）；T3 换成 rank3（原来是 rank2）。</li>
+      <li><b>T4 的执行者和 master</b>：<code>ranksUnfiltered = {1}</code>，<code>rankOfFirstMemcpy = 1</code>——spin 闸门的 master、结果 Bcast 的 root 都跟着换。</li>
+      <li><b>T7 / T13 / T14 的 GPU 动作执行者</b>：memset、memcmp、事件计时全部只剩 rank1。</li>
+      <li><b>空闲集合</b>：rank0 / rank2 从主角退化为「只在映射和集合操作中出现」，在 T12 的 Barrier 上等待。</li>
+      <li><b>结果落点</b>：写入 <code>PeerValueMatrix</code> 的 (1, 3) 位置。</li>
+    </ol>
+    <p><b>不变的：</b>T0 / T0b / T1a 不重跑（4B 闸门是 <code>NodeHelperMulti</code> 构造时建一次，12 对共用）；T1b–T18 的流程模板完全同构；每个 MPI 集合点仍然要求全员到齐——空闲 rank 只是本地工作为空，集合操作一个都不能少。</p>
+  </div>
+
+</div>
+</body>
+</html>
